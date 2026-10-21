@@ -375,12 +375,12 @@ unsafe fn draw_node(n: &NodeState, buf: &mut [u8; 16]) {
     get_color_handle(n.color);
 
     buf.fill(0);
-    let _ = write!(&mut buf[..], "{}/{}", n.tier1, n.optimal);
-    bw_print_xy(buf.as_ptr(), sx - 8, sy - 28);
+    let _ = write!(&mut buf[..], "1 {}/{}", n.tier1, n.optimal);
+    bw_print_xy(buf.as_ptr(), sx - 10, sy - 28);
 
     buf.fill(0);
-    let _ = write!(&mut buf[..], "{}/{}", n.tier2, n.optimal);
-    bw_print_xy(buf.as_ptr(), sx - 8, sy - 14);
+    let _ = write!(&mut buf[..], "2 {}/{}", n.tier2, n.optimal);
+    bw_print_xy(buf.as_ptr(), sx - 10, sy - 14);
 }
 
 // ---------------------------------------------------------------------------

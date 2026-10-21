@@ -89,10 +89,13 @@ in-game font.
 * `CM_PLUS_SATURATION=1` / `CM_PLUS_SATURATION=0` overrides at runtime.
 * **Hidden when depleted** (`resource.amount == 0`) or under construction.
 * **Off-screen nodes are clipped** by `bw_print_xy` (it clamps to the current surface).
-* **Fog of war is not checked**: labels are drawn for every node on the map, including
-  enemy/enemy-fog nodes. This is a deliberate simplification for the first cut — the labels
-  only read synced unit state, so they never desync, but a fog-aware pass (allies + witness
-  only, like the mod's aura circles do with `bw::are_mutual_allies`) is a possible follow-up.
+* **Fogged nodes are hidden**: a node is drawn only when its sprite's
+  `visibility_status` (`visibility_mask` in bw_dat) is non-zero.
+* **Only nodes belonging to a working base are drawn**: within 15 tiles (480 px) of a
+  completed depot. Without this, patches with no nearby base produced meaningless
+  optima of 20–30 workers.
+* Labels are prefixed `1` (tier 1) and `2` (tier 2); a saturated row switches as a whole
+  to the owner's race colour.
 * Shown in replay/witness too (read-only; the spec's "hide in replay?" is decided *show*).
 
 Two test-only knobs (documented, not gameplay): `CM_PLUS_SATURATION_OPT_CAP=N` caps the

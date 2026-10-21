@@ -3,17 +3,23 @@
 Evidence-backed state of each request. Update this file, not the plan's prose, when a
 phase lands.
 
-## 1. Saturation overlay — model done, drawing in progress
+## 1. Saturation overlay — DONE and verified in-game
 
-- Model: `docs/measurements/saturation.md`, 20 host tests in `cosmo-plus-core`.
+- Model: `docs/measurements/saturation.md`, 25 host tests in `cosmo-plus-core`.
 - Measured: worker flingy speeds, harvest timer 42f, delivery cadence (93–124 f solo,
   50 f with 2 workers), per-node assignment counts.
 - **Finding:** functional miners all have the same speed (1280). `Talos`, `Gosvileth`,
   `Agrileth`, `Prudence`, `Dyad`, `Constituent` have flingy `top_speed = 1` in this build
   (placeholder/immobile). So a tier-1 vs tier-2 optimum split has **no speed basis** here;
-  the overlay must show the truth (likely equal denominators), not 8/4.
-- Drawing: in progress (separate deep task). Acceptance checklist:
-  `docs/ACCEPTANCE.md` §1.
+  the overlay shows the truth (equal denominators), not 8/4.
+- Drawing: `overlay.rs`, hooked at the game draw proc (draw pass, not simulation), two
+  `assigned/optimal` rows per node, white → owner's race colour when saturated.
+- Verified: node counts/optima in `cosmo_plus.log`; A/B pixel diff; screenshots
+  `/tmp/opencode/overlay-release.png`, `overlay-cap2.png`, `overlay-filtered.png`.
+- Hardened after review: only nodes within 15 tiles of a depot are shown (no "/20" noise)
+  and fogged nodes are skipped.
+- Known remaining: rows are unlabelled (top = tier 1, bottom = tier 2); gas nodes use the
+  same mineral-derived optimum; no OCR test (log + pixel diff instead).
 
 ## 2. Data pass — DONE and verified in a live game
 
@@ -23,8 +29,10 @@ phase lands.
 - Gas tiers: ore −100/−150/−200 and time −10/−15/−20 s applied to Sieve/Cedent/Eskigant/
   Arch, Reservoir/Aquifer/Excisant/Abutment, Wellbore/Ezigrisant.
 - Bloodsummon `Capillary`/`Artery` are not in the live tier table; skipped (documented).
-- **Not done:** in-place extractor upgrades. Needs a custom order/button; Zerg already
-  morphs, the other races do not. Design options in `docs/PLUS-DATA.md`.
+- **Not done:** in-place extractor upgrades. Feasibility in
+  `docs/extractor-upgrade-notes.md`: the engine already replaces the geyser unit with the
+  extractor in place, so "upgrade" is "allow the next tier to be built on a capped node";
+  needs a build-placement hook and its own verification pass. Zerg already morphs.
 
 ## 3. Anti-meta mode — roll logic DONE, engine application pending
 

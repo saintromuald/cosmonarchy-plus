@@ -53,6 +53,9 @@ pub struct PlusConfig {
     pub overrides: Vec<Override>,
     pub gas_tier_deltas: BTreeMap<u32, GasTierDelta>,
     pub saturation: SaturationConfig,
+    /// Optional gameplay mode (e.g. `antimeta`). `None` = no mode (default off).
+    /// The `CM_PLUS_MODE` environment variable, when set, takes precedence over this.
+    pub mode: Option<String>,
 }
 
 /// Parse `plus.yml` text into a [`PlusConfig`].
@@ -105,6 +108,18 @@ pub fn parse_plus_yml(text: &str) -> Result<PlusConfig, String> {
                 d.build_time_seconds = t as i32;
             }
             cfg.gas_tier_deltas.insert(tier, d);
+        }
+    }
+
+    if let Some(mode) = root.get("mode") {
+        match mode {
+            Yaml::Scalar(s) => {
+                let s = s.trim();
+                if !s.is_empty() {
+                    cfg.mode = Some(s.to_string());
+                }
+            }
+            _ => return Err("`mode:` must be a scalar string".to_string()),
         }
     }
 
@@ -200,5 +215,19 @@ saturation:\n  tier1_default: 8\n  tier2_default: 4\n";
             let cfg = parse_plus_yml(&format!("saturation:\n  enabled: {t}\n")).unwrap();
             assert!(cfg.saturation.enabled, "enabled: {t} should be on");
         }
+    }
+
+    #[test]
+    fn mode_field_parses_and_defaults_off() {
+        assert!(parse_plus_yml("").unwrap().mode.is_none());
+        let cfg = parse_plus_yml("mode: antimeta\n").unwrap();
+        assert_eq!(cfg.mode.as_deref(), Some("antimeta"));
+        let cfg = parse_plus_yml("mode: \"antimeta\"\n").unwrap();
+        assert_eq!(cfg.mode.as_deref(), Some("antimeta"));
+        // The YAML subset keeps all scalars as strings; a numeric mode is a non-matching
+        // string, not an error.
+        assert_eq!(parse_plus_yml("mode: 42\n").unwrap().mode.as_deref(), Some("42"));
+        // A structured value is rejected.
+        assert!(parse_plus_yml("mode:\n  - x\n").is_err());
     }
 }

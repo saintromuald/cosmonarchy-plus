@@ -32,9 +32,10 @@ real CrownLink lobby handshake before relying on it.
 
 ## Determinism
 
-- Use the **game's own RNG** at init (`g_rng_seed`, part of the snapped state), not a local
-  RNG and never the wall clock. Both peers start from the same seed and draw in the same
-  order (player 0..7, then workers, then minerals, then gas), so they compute the same roll.
+- Seed the roll from the **game's own synced RNG state** (`g_rng_seed` = 0x0051CA14, part of
+  the snapped state), never the wall clock. The seed value is identical on both peers at game
+  start. The roll itself is a deterministic SplitMix64 expansion of that seed (the pure
+  `roll(seed)` in `cosmo-plus-core`), so both peers compute the same tuple.
 - Plus runs before the first frame, therefore before the rollback plugin's first snapshot
   and before any player command. That makes the modified start part of the initial state on
   both peers.
@@ -54,13 +55,59 @@ real CrownLink lobby handshake before relying on it.
   matching `g_total_*` counters used for score.
 - Announce with a centre-screen message (`bw::println`) so players see the roll.
 
+## Implemented (v1)
+
+The engine side is in `plus/crates/cosmo-plus/src/antimeta.rs`, wired into the first-tick
+block in `frame.rs`. It is a data/rules feature only — no netcode.
+
+- **Activation.** `CM_PLUS_MODE=antimeta` (environment, or a `CM_PLUS_MODE=antimeta` line in
+  `cosmo_plus.conf`) wins over `plus.yml` `mode: antimeta`. Absent both, the mode is **off**.
+  The resolved state is logged to `cosmo_plus.log`. It applies **once per game**, not once
+  per process: a game-pointer/frame-reset guard re-arms it when a new match starts, so
+  returning to the menu and starting another game rolls again.
+- **Replays are skipped.** If `g_game_data.is_replay` is set, the mode logs
+  `replay detected -> skipped` and does not touch the economy (rewriting a replay's start
+  would corrupt playback).
+- **Seed.** The game's synced RNG seed (`g_rng_seed`, `0x0051CA14`), read through
+  `api.rng_seed`, at the first game tick. Both peers read the same value at game start, so
+  no round trip is needed.
+- **Roll.** `cosmo_plus_core::antimeta::roll(seed)` (SplitMix64) → workers 4..=8,
+  minerals 100..=300 step 5, gas 0..=125 step 5. Logged as `seed=… roll workers=… …`.
+- **Per active player** (Human or Computer, not neutral, with a completed town hall), in
+  fixed player order 0..7:
+  1. find the first completed town hall (`DEPOT_IDS`) and its centre position;
+  2. count completed tier-1 workers (Mason 7 / Droleth 41 / Scribe 64 / Pilgrim 439; units
+     with `remaining_build_time == 0`, so eggs/morphs are excluded);
+  3. remove excess workers silently, furthest from the town hall first
+     (`unit->user_action_flags |= UserActionFlags_SilentRemove` then `bwfunc_remove`
+     0x00475710);
+  4. spawn missing workers near the town hall with the game's `create_unit` (0x004A09D0)
+     + `update_unit_stats_and_finish_building` (0x004A01F0) + `show_finished_unit`
+     (0x0049EC30) + `update_unit_strength` (0x0049FA40). Spawn position is the town-hall
+     centre plus a deterministic ring of offsets (8 directions × radii 80..208 px); if a
+     position is blocked, the next offset is tried. Never spawns inside the town hall
+     (the create path rejects colliding positions);
+  5. overwrite `g_game_minerals`/`g_total_minerals`/`g_game_vespene`/`g_total_vespene` for
+     that player with the rolled values.
+  Each player logs `workers {before} -> {target} (removed, added) minerals gas`.
+- **Announce.** The roll is shown in-game via `api.print_text` (the `BWFXN_DisplayText`
+  path, player 8, non-replay). If the accessor is unavailable, it logs only.
+
+### Lobby limitation
+
+The mode is **not** a lobby/game-type entry. It is a per-client config flag: both clients in
+a match must set `CM_PLUS_MODE=antimeta` (or `mode: antimeta` in their `plus.yml`) and agree
+on the same value, or the starts will desync. A lobby template (`Anti Meta(1).got`) is not
+shipped because the engine's `is_melee_game`/`GameTypeList` rejects unknown (type, subtype)
+pairs — a new entry needs an engine change, not just a `.got` file.
+
 ## Edge cases
 
 - Maps that pre-place more workers than the cap (some UMS maps): remove down to the target,
   but never remove non-worker units.
 - Fewer than 4 start locations/players: apply only to active players.
-- Replays: the mode is in the template, so a replay re-applies the same roll deterministically
-  only if the RNG state at init is reproduced; verify, otherwise record the roll in the
-  replay header/chat.
-- Rollback: no new persistent state is needed (the roll is applied once), so no serializer
-  changes. If the roll is stored for display, put it in plugin state.
+- Replays: **skipped** by design (see above). A replay records whatever start the live game
+  had, so playback reproduces it without re-rolling.
+- Rollback: no new persistent state is needed (the roll is applied once, before the first
+  snapshot), so no serializer changes. If the roll is stored for display, put it in plugin
+  state.

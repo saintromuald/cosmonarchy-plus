@@ -45,6 +45,58 @@ pub fn roll(seed: u32) -> Roll {
     }
 }
 
+// ---------------------------------------------------------------------------
+// Pure start-state helpers (host-testable, no engine access). The engine side
+// (`cosmo-plus/src/antimeta.rs`) uses these to plan each player's adjustment.
+// ---------------------------------------------------------------------------
+
+/// `RaceId::Enum` values (from `BW/enumerations.h` / the mod's `RaceId`), matching the
+/// `race_textcolor` table in [`crate::saturation`].
+pub mod race {
+    pub const ZERG: u8 = 0;
+    pub const TERRAN: u8 = 1;
+    pub const PROTOSS: u8 = 2;
+    pub const ASKOSI: u8 = 69;
+}
+
+/// Tier-1 (starting) worker unit id for a race, mirroring the mod's
+/// `get_racial_worker_id` (`CM/cm_ids.cpp`): Mason / Droleth / Scribe / Pilgrim.
+/// Returns `None` for a race with no worker (Bloodsummon, Kogri, Neutral, …).
+pub fn racial_worker_id(race: u8) -> Option<u16> {
+    Some(match race {
+        race::TERRAN => 7,    // Terran Mason
+        race::ZERG => 41,     // Zerg Droleth
+        race::PROTOSS => 64,  // Protoss Scribe
+        race::ASKOSI => 439,  // Askosi Pilgrim
+        _ => return None,
+    })
+}
+
+/// Town-hall unit id for a race, mirroring `get_racial_town_center_id`. Returns `None`
+/// for a race with no town hall.
+pub fn racial_town_hall_id(race: u8) -> Option<u16> {
+    Some(match race {
+        race::TERRAN => 106,  // Terran Ministry
+        race::ZERG => 131,    // Zerg Hachirosk
+        race::PROTOSS => 154, // Protoss Nexus
+        race::ASKOSI => 429,  // Askosi Landlock
+        _ => return None,
+    })
+}
+
+/// The tier-1 worker ids counted and spawned by the mode (one per playable race).
+pub const TIER1_WORKER_IDS: &[u16] = &[7, 41, 64, 439];
+
+/// How many workers to remove / add to move `current` to `target`.
+/// Returns `(to_remove, to_add)`; at most one of the two is non-zero.
+pub fn worker_adjustment(current: u32, target: u32) -> (u32, u32) {
+    if current >= target {
+        (current - target, 0)
+    } else {
+        (0, target - current)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -92,5 +144,28 @@ mod tests {
         assert!(w[4] && w[8], "worker endpoints not hit");
         assert!(m[0] && m[40], "mineral endpoints not hit");
         let _ = (saw_low, saw_high);
+    }
+
+    #[test]
+    fn worker_adjustment_plan() {
+        assert_eq!(worker_adjustment(6, 8), (0, 2));
+        assert_eq!(worker_adjustment(6, 4), (2, 0));
+        assert_eq!(worker_adjustment(6, 6), (0, 0));
+        assert_eq!(worker_adjustment(0, 8), (0, 8));
+        assert_eq!(worker_adjustment(12, 4), (8, 0));
+    }
+
+    #[test]
+    fn racial_ids_match_authoritative_mapping() {
+        assert_eq!(racial_worker_id(race::TERRAN), Some(7));
+        assert_eq!(racial_worker_id(race::ZERG), Some(41));
+        assert_eq!(racial_worker_id(race::PROTOSS), Some(64));
+        assert_eq!(racial_worker_id(race::ASKOSI), Some(439));
+        assert_eq!(racial_worker_id(70), None); // Bloodsummon has no worker
+        assert_eq!(racial_town_hall_id(race::TERRAN), Some(106));
+        assert_eq!(racial_town_hall_id(race::ZERG), Some(131));
+        assert_eq!(racial_town_hall_id(race::PROTOSS), Some(154));
+        assert_eq!(racial_town_hall_id(race::ASKOSI), Some(429));
+        assert_eq!(racial_town_hall_id(70), None);
     }
 }

@@ -51,6 +51,7 @@ unsafe extern "C" fn tick() {
                 measure_begin();
             }
         });
+        crate::antimeta::on_game_tick();
         if measure_enabled() {
             measure_tick();
         }

@@ -5,6 +5,14 @@
 # resolved at runtime against that file, so ids never have to be hand-entered.
 # An omitted field leaves that cost unchanged.
 
+# Optional gameplay mode. Default off (no `mode:` key). The `CM_PLUS_MODE` environment
+# variable (or a `CM_PLUS_MODE=...` line in `cosmo_plus.conf`) takes precedence over this.
+#
+#   mode: antimeta   # one symmetric start roll per game: workers 4-8, minerals 100-300
+#                    # (step 5), gas 0-125 (step 5), applied to every active player.
+#                    # Both clients in a match must set the same mode.
+# mode: antimeta
+
 # Absolute unit cost overrides (minerals / gas / build_time in frames).
 overrides:
   # --- Zerg structure costs (ore/gas, absolute) ---

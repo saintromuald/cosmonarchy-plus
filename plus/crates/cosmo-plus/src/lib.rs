@@ -15,6 +15,8 @@ mod overlay;
 mod plugin;
 mod plus;
 
+mod antimeta;
+
 /// Bumped when the Plus <-> netcode/handshake surface changes.
 #[no_mangle]
 pub extern "system" fn cosmo_plus_abi() -> u32 {

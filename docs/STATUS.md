@@ -34,16 +34,34 @@ phase lands.
   extractor in place, so "upgrade" is "allow the next tier to be built on a capped node";
   needs a build-placement hook and its own verification pass. Zerg already morphs.
 
-## 3. Anti-meta mode — roll logic DONE, engine application pending
+## 3. Anti-meta mode — roll + engine application DONE
 
-- `cosmo-plus-core/src/antimeta.rs`: deterministic SplitMix roll from a u32 seed;
-  workers 4–8, minerals 100–300/5, gas 0–125/5; 3 tests including 100k seeds.
-- Engine side: design and addresses in `docs/antimeta-mode-notes.md`
-  (`create_unit` 0x004A09D0 custom convention, `bwfunc_remove` 0x00475710, resources at
-  0x0057F0F0/0x0057F120 + totals, player table 0x0057EEE0).
-- Mode selection v1: `CM_PLUS_MODE=antimeta` (config); lobby template is a stretch goal —
-  the `.got` type field is a **u16 at 0x40**, and `is_melee_game` rejects unknown
+- `cosmo-plus-core/src/antimeta.rs`: deterministic SplitMix64 roll from a u32 seed;
+  workers 4–8, minerals 100–300/5, gas 0–125/5; pure helpers (`racial_worker_id`,
+  `racial_town_hall_id`, `worker_adjustment`) with host tests.
+- Engine side `cosmo-plus/src/antimeta.rs`, applied once **per game** (game-pointer +
+  frame-reset guard; replays are skipped so playback is never rewritten):
+  - activation: `CM_PLUS_MODE=antimeta` (env/`cosmo_plus.conf`) wins over `plus.yml`
+    `mode: antimeta`; **default off**, resolved state logged.
+  - seed = the game's synced RNG seed (`api.rng_seed` → `g_rng_seed` 0x0051CA14), read once;
+    identical on both peers at game start.
+  - per active player (Human/Computer, completed town hall), in fixed order 0..7:
+    count completed tier-1 workers, remove excess (furthest first, `silent_remove` =
+    `UserActionFlags_SilentRemove` + `bwfunc_remove` 0x00475710), spawn missing near the
+    town hall (`create_unit` 0x004A09D0 + `update_unit_stats_and_finish_building` 0x004A01F0
+    + `show_finished_unit` 0x0049EC30 + `update_unit_strength` 0x0049FA40, retrying a ring of
+    offsets on collision), and set `g_game_*` / `g_total_*` (0x0057F0F0/0x0057F120 +
+    0x0057F180/0x0057F150) to the rolled minerals/gas.
+  - announces the roll via `api.print_text` (falls back to log only).
+- Mode selection v1: config/env only. The lobby template path is a stretch goal — the
+  `.got` type field is a **u16 at 0x40**, and `is_melee_game` rejects unknown
   (type, subtype) pairs, so a new entry needs the engine's `GameTypeList`, not just a file.
+  **Lobby limitation:** both clients must set the same mode by hand (no lobby entry).
+- Verification: `tools/build.sh` passes. Real skirmish (Pagan Imperium, 1v1):
+  `seed=0x4c2ddafb roll workers=8 minerals=120 gas=10`; both players `6 -> 8 (added 2)`;
+  on-screen 120 minerals / 10 gas and 8 workers; overlay still drawn. Replay boot with the
+  mode on logs `replay detected -> skipped` and changes nothing.
+  See `docs/antimeta-mode-notes.md` §Implemented.
 
 ## Separation
 

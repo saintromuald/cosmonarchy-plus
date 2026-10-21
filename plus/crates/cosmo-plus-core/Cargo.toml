@@ -1,0 +1,9 @@
+[package]
+name = "cosmo-plus-core"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+name = "cosmo_plus_core"
+
+[dependencies]

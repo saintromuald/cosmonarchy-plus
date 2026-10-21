@@ -1,0 +1,8 @@
+tier,workers_per_node,node_distance_px,cycle_frames,source
+1,1,202,93,measured
+1,1,214,96,measured
+1,1,226,107,measured
+1,1,226,108,measured
+1,1,230,108,measured
+1,1,243,124,measured
+1,2,202,50,measured

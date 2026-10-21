@@ -1,0 +1,3 @@
+[submodule "netcode"]
+	path = netcode
+	url = /home/saintaquinas/Projects/cosmonarchy-rollback

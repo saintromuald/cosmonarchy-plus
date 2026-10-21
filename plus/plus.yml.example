@@ -1,0 +1,71 @@
+# Cosmonarchy Plus gameplay config — example with the user's requested values.
+#
+# Copy this file to `plus.yml` (game directory or `plugins/`) to enable the changes.
+# `unit` is the exact name from `mpq/arr/units.txt` (line index == unit id); names are
+# resolved at runtime against that file, so ids never have to be hand-entered.
+# An omitted field leaves that cost unchanged.
+
+# Absolute unit cost overrides (minerals / gas / build_time in frames).
+overrides:
+  # --- Zerg structure costs (ore/gas, absolute) ---
+  - unit: Zerg Mutath Spire
+    minerals: 250
+    gas: 300
+  - unit: Zerg Tosvrol Haunt
+    minerals: 400
+    gas: 850
+  - unit: Zerg Alkag Iteth
+    minerals: 350
+    gas: 300
+  - unit: Zerg Chokral Chazsal
+    minerals: 750
+    gas: 650
+  - unit: Zerg Matravil Nest
+    minerals: 250
+    gas: 350
+  - unit: Zerg Almakis Antre
+    minerals: 600
+    gas: 750
+  - unit: Zerg Othstol Oviform
+    minerals: 600
+    gas: 1000
+  - unit: Zerg Axtoth Axis
+    minerals: 900
+    gas: 1100
+  - unit: Zerg Geszkath Grotto
+    minerals: 400
+    gas: 900
+  - unit: Zerg Kethraj Keep
+    minerals: 650
+    gas: 1300
+  - unit: Zerg Rakzogth Roost
+    minerals: 650
+    gas: 1300
+
+# Gas extractor deltas per public tier (1 = first extractor: Sieve/Cedent/Eskigant/Arch,
+# 2 = Reservoir/Aquifer/Excisant/Abutment, 3 = Wellbore/Ezigrisant). Deltas, applied as
+# (current + delta), clamped at 0. build_time_seconds is converted to frames (*24).
+gas_tier_deltas:
+  "1":
+    minerals: -100
+    build_time_seconds: -10
+  "2":
+    minerals: -150
+    build_time_seconds: -15
+  "3":
+    minerals: -200
+    build_time_seconds: -20
+
+# Saturation display tuning. The overlay reads these; the measured per-patch optimum
+# `n*(tier, distance)` in docs/measurements/ is authoritative, and these are the fallback
+# constants the user asked for (`0/8` tier-1, `0/4` tier-2).
+saturation:
+  # Master switch. Defaults to ON when this file exists; set false to hide the overlay,
+  # or override at runtime with CM_PLUS_SATURATION=1 / CM_PLUS_SATURATION=0.
+  enabled: true
+  tier1_default: 8
+  tier2_default: 4
+  # colour ramp (overlay task): under / optimal / over
+  # under: grey
+  # optimal: green
+  # over: amber

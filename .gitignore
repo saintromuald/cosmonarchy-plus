@@ -1,0 +1,8 @@
+# build output
+plus/target/
+dist/
+*.log
+*.dmp
+
+# local game/test scratch
+/tmp-*/

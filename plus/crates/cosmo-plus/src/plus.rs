@@ -46,6 +46,12 @@ pub(crate) fn install() {
         crate::cosmo_plus_build_id()
     ));
 
+    // May be too early for the template list (built during engine init); the first game
+    // tick calls this again as a fallback.
+    crate::antimeta::debug_dump_game_types_once();
+    // Debug-only: patch the template loader so the list is dumped right after it is built.
+    crate::antimeta::install_game_type_dump_hook();
+
     crate::frame::install();
     crate::overlay::install();
     crate::zoom::install_player_zoom_floor();

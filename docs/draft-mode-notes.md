@@ -200,30 +200,54 @@ draft history panel.
 
 ## 9. Implementation status (2026-10-22)
 
-**Scaffolding landed** (commits `7bdc420` in cosmonarchy-plus, `43a6bcb` in
-cosmonarchy-rollback):
+**Scaffolding landed** (commits `7bdc420`, `b6b5736` in cosmonarchy-plus, `43a6bcb` in
+cosmonarchy-rollback), then **two fixes** (`83d067f` wrapper, `8118d64` hook disable,
+`2725df5` saturation rework):
 
 - Core: draft clock/tiers/pair keys/weighted draw/DraftState serialization, the
   `draft.options:` YAML schema + pool validation, inline YAML lists — 43 host tests.
 - Plugin: game type 47 detection, deterministic pause at the trigger frame
   (`g_is_game_paused` 0x006509C4, already in the rollback snapshot ranges), option pool
   from the synced RNG seed, pick command id **89** (fixed 4 bytes; `id < 0x5D` so samase
-  records it into replays automatically — ids 93+ would not replay), command hook via
-  `hook_ingame_command`, simultaneous apply + unpause, v1 effects (spawn drops,
-  resources, heal-all) on the proven write paths, panel UI + `GetAsyncKeyState` hotkeys,
-  `cosmo_plus_state_*` blob exports consumed by the rollback plugin's generic
-  by-name resolver.
+  records it into replays automatically — ids 93+ would not replay), simultaneous apply
+  + unpause, v1 effects (spawn drops, resources, heal-all) on the proven write paths,
+  panel UI + `GetAsyncKeyState` hotkeys, `cosmo_plus_state_*` blob exports consumed by
+  the rollback plugin's generic by-name resolver.
 - Templates: `Draft(1).got` (47) generated and staged alongside Anti Meta; the launcher
   stages both; `plus.yml.example` shows the schema.
-- Verified in a live boot: plugin loads, hook registers (`result=1`), pool validation
-  reports the (expected) gaps while the tables are empty.
+
+**Verified in live boots:** the engine's game-type list contains **Anti Meta (46) and
+Draft (47)** (dumped via the fixed template-loader hook — both appear in the Create Game
+dropdown). Plugin loads, hook registers, pool validation logs gaps while tables are
+empty.
+
+**Known problems, with fixes:**
+
+1. **The pick-command hook broke live in-game input** (menus fine, matches dead — zero
+   commands reached the send path; confirmed via a command logger). The samase
+   `hook_ingame_command` path installs a ProcessCommands wrapper on the first-ever
+   registration (aise only registers as a save-fallback), and that wrapper misfired in
+   this game. The hook is now env-gated behind `CM_PLUS_DRAFT_COMMAND_HOOK=1` (off by
+   default) until the wrapper chain is understood. The clock/pool/state logic is
+   unaffected; the draft simply cannot receive picks yet.
+2. **The zoom runtime patch broke in-game rendering** (black screen in matches on the
+   installed 17 Oct gptp). The live config sets `CM_PLUS_ZOOM_PLAYER_MIN=200` (stock),
+   which skips the patch entirely. The zoom feature's owner must re-verify its signature
+   against the shipped gptp before it can be re-enabled.
+3. **Armed netcode (host/join) ignores ordinary input by design** (the turn system
+   drives the sim from its own input table while under development). The launcher now
+   defaults to **Solo** (Enter on the role prompt), the only mode intended for normal
+   play right now.
 
 **Still to do:**
 
 - **Spike 0 (the real test):** a two-client CrownLink match with the mode armed —
-  confirm the pause happens on both peers, a hotkey pick arrives as a synced command on
-  both sides while paused, unpause is clean, and `desyncs=0`. This is the gate before
-  Phase 1 is considered done.
-- **Option tables:** you provide the real per-race-pair lists; they drop into
+  pause on both peers, hotkey pick arriving as a synced command while paused, clean
+  unpause, `desyncs=0` — blocked on item 1 above.
+- **Option tables:** user provides the real per-race-pair lists; they drop into
   `plus.yml`'s `draft:` section (no rebuild needed).
 - Phase 2/3 effects (reveal, temp buffs, refund token) and AI picks are still stubs.
+- Smart casting (SC2-style one-cast-per-click with a 4-cast/1.5 s per-group cap) and
+  tab cycling between unit types: planned as a separate feature after the current
+  fixes; the natural hook point is `hook_ingame_command` on the target-command id —
+  which is exactly the surface item 1 needs, so it is blocked on the same fix.

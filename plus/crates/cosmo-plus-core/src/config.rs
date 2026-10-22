@@ -6,6 +6,7 @@
 
 use std::collections::BTreeMap;
 
+use crate::draft::{Anchor, DraftOption, Effect};
 use crate::yaml::{self, Yaml};
 
 /// One absolute unit override (`overrides:`). An omitted field means "unchanged".
@@ -56,6 +57,8 @@ pub struct PlusConfig {
     /// Optional gameplay mode (e.g. `antimeta`). `None` = no mode (default off).
     /// The `CM_PLUS_MODE` environment variable, when set, takes precedence over this.
     pub mode: Option<String>,
+    /// Draft-mode option tables (`draft:` section).
+    pub draft: Vec<DraftOption>,
 }
 
 /// Parse `plus.yml` text into a [`PlusConfig`].
@@ -149,7 +152,185 @@ pub fn parse_plus_yml(text: &str) -> Result<PlusConfig, String> {
         }
     }
 
+    if let Some(draft) = root.get("draft") {
+        let Yaml::Map(entries) = draft else {
+            return Err("`draft:` must be a map".to_string());
+        };
+        if let Some((_, options)) = entries.iter().find(|(k, _)| k == "options") {
+            let Yaml::List(items) = options else {
+                return Err("`draft.options:` must be a list".to_string());
+            };
+            cfg.draft = items.iter().map(parse_draft_option).collect::<Result<_, _>>()?;
+        }
+    }
+
     Ok(cfg)
+}
+
+/// Parse one `draft.options:` entry.
+fn parse_draft_option(item: &Yaml) -> Result<DraftOption, String> {
+    let Yaml::Map(entries) = item else {
+        return Err("`draft.options:` items must be maps".to_string());
+    };
+    let get = |k: &str| entries.iter().find(|(kk, _)| kk == k).map(|(_, v)| v);
+
+    let id = get("id").and_then(Yaml::as_str).ok_or("draft option missing `id:`")?;
+    let name = get("name")
+        .and_then(Yaml::as_str)
+        .unwrap_or(id)
+        .to_string();
+    let min_draft = get("min_draft")
+        .and_then(Yaml::as_i64)
+        .unwrap_or(1)
+        .max(1) as u32;
+    let weight = get("weight")
+        .and_then(Yaml::as_i64)
+        .unwrap_or(10)
+        .max(0) as u32;
+    let pair = match get("pair") {
+        Some(v) => parse_pair(v)?,
+        None => None,
+    };
+
+    let effect = get("effect").ok_or(format!("draft option `{id}` missing `effect:`"))?;
+    let effect = parse_effect(effect).map_err(|e| format!("draft option `{id}`: {e}"))?;
+
+    Ok(DraftOption {
+        id: id.to_string(),
+        name,
+        min_draft,
+        weight,
+        pair,
+        effect,
+    })
+}
+
+/// Parse a `pair:` value: `"Z/T"`, `"T/Z"` (unordered), `"*"`, or omitted.
+fn parse_pair(v: &Yaml) -> Result<Option<(u8, u8)>, String> {
+    let s = v.as_str().ok_or("`pair:` must be a string like \"Z/T\" or \"*\"")?;
+    let s = s.trim();
+    if s == "*" {
+        return Ok(None);
+    }
+    let race_byte = |c: char| match c.to_ascii_uppercase() {
+        'Z' => Ok(crate::draft::race::ZERG),
+        'T' => Ok(crate::draft::race::TERRAN),
+        'P' => Ok(crate::draft::race::PROTOSS),
+        'A' => Ok(crate::draft::race::ASKOSI),
+        'B' => Ok(crate::draft::race::BLOODSUMMON),
+        other => Err(format!("unknown race letter `{other}` in pair `{s}`")),
+    };
+    let mut chars = s.chars().filter(|c| !c.is_whitespace() && *c != '/');
+    let a = chars.next().map(race_byte).transpose()?.ok_or(format!("empty pair `{s}`"))?;
+    let b = chars.next().map(race_byte).transpose()?.ok_or(format!("pair `{s}` needs two races"))?;
+    if chars.next().is_some() {
+        return Err(format!("pair `{s}` must be exactly two races"));
+    }
+    Ok(Some(if a <= b { (a, b) } else { (b, a) }))
+}
+
+/// Parse an `effect:` map into [`Effect`].
+fn parse_effect(v: &Yaml) -> Result<Effect, String> {
+    let Yaml::Map(entries) = v else {
+        return Err("`effect:` must be a map with a `type:`".to_string());
+    };
+    let get = |k: &str| entries.iter().find(|(kk, _)| kk == k).map(|(_, v)| v);
+    let ty = get("type")
+        .and_then(Yaml::as_str)
+        .ok_or("effect missing `type:`")?
+        .trim();
+
+    let i = |k: &str| get(k).and_then(Yaml::as_i64).unwrap_or(0) as i32;
+    let u = |k: &str| get(k).and_then(Yaml::as_i64).unwrap_or(0) as u32;
+    let anchor = || -> Result<Anchor, String> {
+        match get("anchor").and_then(Yaml::as_str).unwrap_or("townhall").trim() {
+            "townhall" => Ok(Anchor::TownHall),
+            "expansion" => Ok(Anchor::Expansion),
+            other => Err(format!("unknown anchor `{other}` (townhall|expansion)")),
+        }
+    };
+    let units = || -> Result<Vec<u16>, String> {
+        let Some(v) = get("units") else {
+            return Err("spawn effect missing `units:` list".to_string());
+        };
+        let Yaml::List(items) = v else {
+            return Err("`units:` must be a list of unit ids".to_string());
+        };
+        items
+            .iter()
+            .map(|it| {
+                it.as_i64()
+                    .and_then(|n| u16::try_from(n).ok())
+                    .ok_or_else(|| "unit id out of range".to_string())
+            })
+            .collect()
+    };
+
+    Ok(match ty {
+        "spawn" => Effect::SpawnUnits {
+            units: units()?,
+            count: u("count").max(1).min(12) as u8,
+            anchor: anchor()?,
+        },
+        "resources" => Effect::Resources {
+            minerals: i("minerals"),
+            gas: i("gas"),
+        },
+        "heal_all" => Effect::HealAll,
+        "recharge_all" => Effect::RechargeAll,
+        "reveal" => Effect::Reveal {
+            seconds: u("seconds").max(1),
+        },
+        "temp_weapon_levels" => Effect::TempWeaponLevels {
+            levels: i("levels").clamp(-3, 3) as i8,
+            seconds: u("seconds").max(1),
+        },
+        "temp_armor_levels" => Effect::TempArmorLevels {
+            levels: i("levels").clamp(-3, 3) as i8,
+            seconds: u("seconds").max(1),
+        },
+        "refund_token" => Effect::RefundToken,
+        other => return Err(format!("unknown effect type `{other}`")),
+    })
+}
+
+/// Validate that every race pair has enough options for every draft number the mode can
+/// reach. Returns a list of human-readable gaps (empty = OK). Structural errors are
+/// already rejected by the parser; this is a curation aid logged by the plugin.
+pub fn validate_draft_pools(
+    options: &[DraftOption],
+    pairs: &[(u8, u8)],
+    max_draft: u32,
+) -> Vec<String> {
+    use crate::draft::{OPTION_COUNT, tier_for_draft};
+
+    let mut gaps = Vec::new();
+    for &(a, b) in pairs {
+        for draft in 1..=max_draft {
+            let tier = tier_for_draft(draft);
+            let available = options
+                .iter()
+                .filter(|o| {
+                    o.min_draft <= draft
+                        && match o.pair {
+                            None => true,
+                            Some(p) => p == (a, b),
+                        }
+                        && match tier {
+                            // Lower-tier leftovers are allowed into higher tiers, so only
+                            // require that the option's own tier isn't *above* this one.
+                            _ => true,
+                        }
+                })
+                .count();
+            if available < OPTION_COUNT {
+                gaps.push(format!(
+                    "pair ({a},{b}) draft {draft} ({tier:?}): {available} options (< {OPTION_COUNT})"
+                ));
+            }
+        }
+    }
+    gaps
 }
 
 fn clamp_u16(v: i64) -> Result<u16, String> {
@@ -229,5 +410,112 @@ saturation:\n  tier1_default: 8\n  tier2_default: 4\n";
         assert_eq!(parse_plus_yml("mode: 42\n").unwrap().mode.as_deref(), Some("42"));
         // A structured value is rejected.
         assert!(parse_plus_yml("mode:\n  - x\n").is_err());
+    }
+
+    #[test]
+    fn draft_section_parses() {
+        let yml = "\
+draft:
+  options:
+    - id: prospectors
+      name: Prospectors
+      min_draft: 1
+      weight: 10
+      effect:
+        type: resources
+        minerals: 150
+    - id: vanguard
+      min_draft: 1
+      pair: Z/T
+      effect:
+        type: spawn
+        units: [7]
+        count: 2
+        anchor: townhall
+    - id: bloodlust
+      min_draft: 6
+      pair: \"T/Z\"
+      effect:
+        type: temp_weapon_levels
+        levels: 1
+        seconds: 90
+";
+        let cfg = parse_plus_yml(yml).unwrap();
+        assert_eq!(cfg.draft.len(), 3);
+        assert_eq!(cfg.draft[0].id, "prospectors");
+        assert_eq!(cfg.draft[0].name, "Prospectors"); // explicit name
+        assert_eq!(cfg.draft[1].name, "vanguard"); // name falls back to id
+        assert_eq!(
+            cfg.draft[0].effect,
+            Effect::Resources { minerals: 150, gas: 0 }
+        );
+        assert_eq!(
+            cfg.draft[1].effect,
+            Effect::SpawnUnits {
+                units: vec![7],
+                count: 2,
+                anchor: Anchor::TownHall
+            }
+        );
+        // "T/Z" normalises to the same unordered pair as "Z/T".
+        assert_eq!(cfg.draft[1].pair, Some((0, 1)));
+        assert_eq!(cfg.draft[2].pair, Some((0, 1)));
+        assert_eq!(
+            cfg.draft[2].effect,
+            Effect::TempWeaponLevels { levels: 1, seconds: 90 }
+        );
+    }
+
+    #[test]
+    fn draft_section_rejects_bad_shapes() {
+        // Missing effect.
+        assert!(parse_plus_yml("draft:\n  options:\n    - id: x\n").is_err());
+        // Unknown effect type.
+        assert!(
+            parse_plus_yml("draft:\n  options:\n    - id: x\n      effect:\n        type: magic\n")
+                .is_err()
+        );
+        // Spawn without units.
+        assert!(
+            parse_plus_yml("draft:\n  options:\n    - id: x\n      effect:\n        type: spawn\n")
+                .is_err()
+        );
+        // Bad pair letter.
+        assert!(
+            parse_plus_yml(
+                "draft:\n  options:\n    - id: x\n      pair: Z/Q\n      effect:\n        type: heal_all\n"
+            )
+            .is_err()
+        );
+        // draft.options must be a list.
+        assert!(
+            parse_plus_yml("draft:\n  options: nope\n").is_err()
+        );
+    }
+
+    #[test]
+    fn validate_draft_pools_reports_gaps() {
+        use crate::draft::{OPTION_COUNT, race};
+        let mk = |id: &str, min: u32| DraftOption {
+            id: id.to_string(),
+            name: id.to_string(),
+            min_draft: min,
+            weight: 10,
+            pair: None,
+            effect: Effect::HealAll,
+        };
+        let options = vec![mk("a", 1), mk("b", 1), mk("c", 4), mk("d", 6)];
+        let gaps = validate_draft_pools(&options, &[(race::ZERG, race::TERRAN)], 8);
+        // Drafts 1-3 have 2 options (3 gaps), 4-5 have 3 (2 gaps), 6+ have exactly 4.
+        assert_eq!(gaps.len(), 5);
+        assert!(gaps.iter().all(|g| g.contains("< 4")));
+        let gaps = validate_draft_pools(&options, &[], 8);
+        assert!(gaps.is_empty());
+        // 4 options from draft 1 onwards = no gaps.
+        let full = vec![
+            mk("a", 1), mk("b", 1), mk("c", 1), mk("d", 1),
+        ];
+        assert!(validate_draft_pools(&full, &[(0, 1)], 20).is_empty());
+        assert_eq!(OPTION_COUNT, 4);
     }
 }

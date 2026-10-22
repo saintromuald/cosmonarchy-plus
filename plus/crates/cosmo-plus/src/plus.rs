@@ -51,6 +51,8 @@ pub(crate) fn install() {
     crate::antimeta::debug_dump_game_types_once();
     // Debug-only: patch the template loader so the list is dumped right after it is built.
     crate::antimeta::install_game_type_dump_hook();
+    // Draft mode (Mechabellum-style): pick-command hook + pool validation.
+    crate::draft::install();
 
     crate::frame::install();
     crate::overlay::install();

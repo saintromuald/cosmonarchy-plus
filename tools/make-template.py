@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Generate the "Anti Meta" lobby template from the stock Melee template.
+"""Generate the Plus lobby templates from the stock Melee template.
 
 The `.got` format (deduced from the shipped templates and confirmed against the
 template loader in StarCraft.exe 1.16.1, funcs at 0x4AB750/0x4AB150):
@@ -22,26 +22,30 @@ template loader in StarCraft.exe 1.16.1, funcs at 0x4AB750/0x4AB150):
   0x4A..0x60    ..    the rest of the settings block, copied verbatim from Melee.
 
 Everything except the name and the game type byte is copied verbatim from `Melee(1).got`,
-so the mode inherits Melee's victory condition, starting units, fog and team settings.
+so the modes inherit Melee's victory condition, starting units, fog and team settings.
 
 The template only shows up if `templates.lst` lists it (the engine enumerates that file);
-this script's `--install` appends the entry, and `cosmo-variant` stages both files at
-launch time.
+`--install` appends the entries, and `cosmo-variant` stages the files at launch time.
+
+Templates shipped by Plus:
+  "Anti Meta"  type 46 — anti-meta mode (random start roll)
+  "Draft"      type 47 — Draft mode (Mechabellum-style roguelite drafts)
 
 Usage:
-  tools/make-template.py <Melee(1).got> <out.got> [type]
+  tools/make-template.py <Melee(1).got> <out.got> [type] [name]
   tools/make-template.py --install [Release|Prerelease]   # game tree install + lst entry
 """
 import struct
 import sys
 from pathlib import Path
 
-NAME = "Anti Meta"
-MARKER_TYPE = 46  # 45 is taken by Mindshare; see docs/antimeta-mode-notes.md
 GAME_ROOT = Path.home() / "Games/cosmonarchy/prefix/drive_c/Cosmonarchy"
 
+# (template name, game type byte). 45 = Mindshare (upstream), 46 = Anti Meta, 47 = Draft.
+PLUS_TEMPLATES = [("Anti Meta", 46), ("Draft", 47)]
 
-def build(src: Path, dst: Path, gtype: int = MARKER_TYPE) -> None:
+
+def build(src: Path, dst: Path, gtype: int, name: str) -> None:
     data = bytearray(src.read_bytes())
     if len(data) < 0x61:
         raise SystemExit(f"{src}: too short ({len(data)} bytes)")
@@ -50,11 +54,11 @@ def build(src: Path, dst: Path, gtype: int = MARKER_TYPE) -> None:
     if not (0 < gtype < 0x80):
         raise SystemExit(f"game type {gtype} out of range (1..127)")
 
-    name = NAME.encode("ascii")
-    if len(name) > 31:
+    name_bytes = name.encode("ascii")
+    if len(name_bytes) > 31:
         raise SystemExit("name too long")
     data[1:0x21] = b"\0" * 0x20  # name block 1 (32 bytes)
-    data[1 : 1 + len(name)] = name
+    data[1 : 1 + len(name_bytes)] = name_bytes
     data[0x41] = gtype  # game type byte
     data[0x42] = 0
     data[0x43:0x45] = struct.pack("<H", 1)  # subtype 1 (only value the dropdown lists)
@@ -87,12 +91,13 @@ def install(build_name: str = "Release") -> None:
     src = tpl / "Melee(1).got"
     if not src.exists():
         raise SystemExit(f"missing stock template: {src}")
-    out = tpl / f"{NAME}(1).got"
-    build(src, out)
     lst = tpl / "templates.lst"
-    changed = update_lst(lst, out.name)
-    print(f"wrote {out}")
-    print(f"{'updated' if changed else 'already listed in'} {lst}")
+    for name, gtype in PLUS_TEMPLATES:
+        out = tpl / f"{name}(1).got"
+        build(src, out, gtype, name)
+        changed = update_lst(lst, out.name)
+        print(f"wrote {out}")
+        print(f"{'updated' if changed else 'already listed in'} {lst}")
 
 
 if __name__ == "__main__":
@@ -100,7 +105,8 @@ if __name__ == "__main__":
         install(sys.argv[2] if len(sys.argv) > 2 else "Release")
     elif len(sys.argv) >= 3:
         build(Path(sys.argv[1]), Path(sys.argv[2]),
-              int(sys.argv[3], 0) if len(sys.argv) > 3 else MARKER_TYPE)
+              int(sys.argv[3], 0) if len(sys.argv) > 3 else 46,
+              sys.argv[4] if len(sys.argv) > 4 else "Anti Meta")
         print(f"wrote {sys.argv[2]}")
     else:
         raise SystemExit(__doc__)

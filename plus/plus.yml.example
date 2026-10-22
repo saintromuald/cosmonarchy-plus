@@ -18,6 +18,63 @@
 #                    # Both clients in a match must set the same mode.
 # mode: antimeta
 
+# Draft mode option tables (the "Draft" game type, 47). Every 2 minutes the game pauses
+# and both players pick from the same 4 options, drawn deterministically from this list
+# (weighted, without replacement) filtered by the race pair and the draft number.
+# `pair: Z/T` restricts an option to that unordered pair ("*" / omitted = any pair);
+# `min_draft:` gates the option by draft number (4 = minute 8, 6 = minute 12).
+# These are EXAMPLE entries — curate per `docs/draft-mode-notes.md`.
+draft:
+  options:
+    - id: prospectors
+      name: Prospectors
+      min_draft: 1
+      weight: 10
+      effect:
+        type: resources
+        minerals: 150
+    - id: deep_recon
+      name: Deep Recon
+      min_draft: 1
+      weight: 8
+      effect:
+        type: reveal
+        seconds: 8
+    - id: vanguard
+      name: Vanguard
+      min_draft: 1
+      weight: 10
+      pair: Z/T
+      effect:
+        type: spawn
+        units: [7]        # per-race worker ids belong in the real tables
+        count: 2
+        anchor: townhall
+    - id: field_medic
+      name: Field Medic
+      min_draft: 1
+      weight: 6
+      effect:
+        type: heal_all
+    - id: supply_drop
+      name: Supply Drop
+      min_draft: 4
+      weight: 10
+      effect:
+        type: spawn
+        units: [7, 41, 64]
+        count: 3
+        anchor: expansion
+    - id: bloodlust
+      name: Bloodlust
+      min_draft: 6
+      weight: 8
+      effect:
+        type: temp_weapon_levels
+        levels: 1
+        seconds: 90
+
+
 # Absolute unit cost overrides (minerals / gas / build_time in frames).
 overrides:
   # --- Zerg structure costs (ore/gas, absolute) ---

@@ -14,6 +14,7 @@ mod mpqdraft;
 mod overlay;
 mod plugin;
 mod plus;
+mod zoom;
 
 mod antimeta;
 

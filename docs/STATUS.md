@@ -77,6 +77,22 @@ phase lands.
   CrownLink (`desyncs=0`), and the vanilla-client boot. Same acceptance items as before;
   the mechanism is now in place end to end.
 
+## 4. Player zoom-out floor — 3/4 of witness depth — DONE and verified in a live boot
+
+- `cosmo-plus-core/src/zoom.rs`: pure signature search + encoding; 3 host tests, one of
+  which re-maps the widescreen `gptp.qdp` (run with `COSMO_GPTP_DLL=… cargo test -p
+  cosmo-plus-core zoom`).
+- `cosmo-plus/src/zoom.rs`: locates the loaded `gptp.qdp`, verifies the compiled
+  `apply_display_role` branch and its `set_min_zoom_percent` call target, rewrites the
+  player immediate 200 → 125 (`B8 7D 00 00 00`), reads back, logs.
+- Witness floor (100%) untouched; `CM_PLUS_ZOOM_PLAYER_MIN` env override, clamped 100–300.
+- Verified on the 20 Oct release (widescreen `gptp.qdp`, 6,075,904 bytes) via headless
+  probe: `cosmo_plus.log` shows
+  `zoom: player floor 125% (witness floor 100%) @ 0x026249dd; call target 0x02624730`
+  — site = module base + 0xb49dd, target = base + 0xb4730, exactly the compiled layout.
+  Overlay hook, data pass (11 overrides) and rollback pool relocation all still work on
+  the widescreen build. See `docs/zoom-floor.md`.
+
 ## Separation
 
 - `netcode/` untouched by all of the above.

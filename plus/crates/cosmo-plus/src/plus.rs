@@ -48,4 +48,5 @@ pub(crate) fn install() {
 
     crate::frame::install();
     crate::overlay::install();
+    crate::zoom::install_player_zoom_floor();
 }

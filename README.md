@@ -26,6 +26,13 @@ replay on vanilla Cosmonarchy.
    in-place extractor upgrades (see `docs/PLUS-DATA.md`).
 3. **Anti-meta mode** — per-game start randomisation (4–8 workers, 100–300/0–125
    resources in steps of 5), symmetric across teams, from the shared seed.
+4. **Player zoom-out floor at 3/4 of witness depth** — the widescreen build's
+   `WorldZoom` lets witnesses/replays zoom from the 200% default down to 100%
+   (8 wheel-notches). Plus lowers the player floor from 200% to **125%** (6
+   notches — exactly 3/4 of the observer range) with a one-time 5-byte patch of
+   `apply_display_role` in `gptp.qdp`, verified against the clamp signature
+   before it is written. Override with `CM_PLUS_ZOOM_PLAYER_MIN` (percent,
+   100–300) in `cosmo_plus.conf`. See `docs/zoom-floor.md`.
 
 ## Build & install
 

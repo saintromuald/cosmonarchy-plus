@@ -197,3 +197,33 @@ draft history panel.
 4. **First draft:** minute 2. ✔
 5. **Option curation:** you write the tables; I scaffold the YAML schema, validation and
    the draw/apply engine with example options. ✔
+
+## 9. Implementation status (2026-10-22)
+
+**Scaffolding landed** (commits `7bdc420` in cosmonarchy-plus, `43a6bcb` in
+cosmonarchy-rollback):
+
+- Core: draft clock/tiers/pair keys/weighted draw/DraftState serialization, the
+  `draft.options:` YAML schema + pool validation, inline YAML lists — 43 host tests.
+- Plugin: game type 47 detection, deterministic pause at the trigger frame
+  (`g_is_game_paused` 0x006509C4, already in the rollback snapshot ranges), option pool
+  from the synced RNG seed, pick command id **89** (fixed 4 bytes; `id < 0x5D` so samase
+  records it into replays automatically — ids 93+ would not replay), command hook via
+  `hook_ingame_command`, simultaneous apply + unpause, v1 effects (spawn drops,
+  resources, heal-all) on the proven write paths, panel UI + `GetAsyncKeyState` hotkeys,
+  `cosmo_plus_state_*` blob exports consumed by the rollback plugin's generic
+  by-name resolver.
+- Templates: `Draft(1).got` (47) generated and staged alongside Anti Meta; the launcher
+  stages both; `plus.yml.example` shows the schema.
+- Verified in a live boot: plugin loads, hook registers (`result=1`), pool validation
+  reports the (expected) gaps while the tables are empty.
+
+**Still to do:**
+
+- **Spike 0 (the real test):** a two-client CrownLink match with the mode armed —
+  confirm the pause happens on both peers, a hotkey pick arrives as a synced command on
+  both sides while paused, unpause is clean, and `desyncs=0`. This is the gate before
+  Phase 1 is considered done.
+- **Option tables:** you provide the real per-race-pair lists; they drop into
+  `plus.yml`'s `draft:` section (no rebuild needed).
+- Phase 2/3 effects (reveal, temp buffs, refund token) and AI picks are still stubs.

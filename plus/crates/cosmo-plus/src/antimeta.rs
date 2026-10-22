@@ -141,13 +141,44 @@ unsafe extern "C" fn cosmo_plus_after_template_load() {
     dump_game_type_list();
 }
 
+// The loader is `call 0x4AB860` with its callback passed on the stack:
+//
+//     push 0x4AB150            ; callback arg
+//     call 0x4AB860            ; loader reads the callback at [esp+4]
+//     ...                      ; caller pops the callback itself afterwards
+//
+// The wrapper must therefore invoke the loader with the callback *at [esp+4]
+// on entry*, i.e. exactly as `push callback; call loader`. A pushad/popad
+// guard would sit 32 bytes between the loader and its argument (the loader
+// then calls garbage — the original crash: `eip 0x81ec8b55`), so the shuffle
+// below re-lays the top two slots around our own call instead:
+//
+//   entry:  [esp] = return-to-caller, [esp+4] = callback
+//   before: [esp] = callback,        [esp+4] = return-to-caller
+//   call -> [esp] = return-to-wrapper, [esp+4] = callback   (loader is happy)
+//   after:  [esp] = callback,        [esp+4] = return-to-caller
+//
+// The loader's eax and flags survive the dump call, and the final swap makes
+// `ret` pop the return-to-caller while leaving the callback on the stack for
+// the original caller to pop, so both call sites see the exact post-call
+// state the engine expects.
 core::arch::global_asm!(
     ".global _cosmo_plus_template_load_dump_wrapper",
     "_cosmo_plus_template_load_dump_wrapper:",
-    "pushad",
+    "mov eax, [esp]",
+    "mov ecx, [esp + 4]",
+    "mov [esp + 4], eax",
+    "mov [esp], ecx",
     "call dword ptr [_cosmo_plus_orig_template_loader]",
-    "popad",
+    "push eax",
+    "pushfd",
     "call _cosmo_plus_after_template_load",
+    "popfd",
+    "pop eax",
+    "mov ecx, [esp]",
+    "mov edx, [esp + 4]",
+    "mov [esp], edx",
+    "mov [esp + 4], ecx",
     "ret",
     ".globl _cosmo_plus_orig_template_loader",
     ".set _cosmo_plus_orig_template_loader, {orig}",

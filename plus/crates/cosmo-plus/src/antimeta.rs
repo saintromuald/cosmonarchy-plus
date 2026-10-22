@@ -56,6 +56,147 @@ const PLAYER_TYPE_HUMAN: u8 = 2;
 /// Number of playable player slots (`PlayerLimit`, BW/structures.h:25).
 const PLAYER_LIMIT: usize = 8;
 
+/// Head of the engine's game type list (`g_game_type_list`, BW/bwdata.h:1479). Nodes are
+/// `GameTypeList`: `prev` (0), `next` (4), `name[64]` (8), `game_type` u8 (0x48),
+/// `unused` u8 (0x49), `sub_type` u16 (0x4A). Built by the template loader at startup.
+const ADDR_GAME_TYPE_LIST: usize = 0x0051A270;
+
+/// One-shot debug dump of `g_game_type_list` for `CM_PLUS_DUMP_GAME_TYPES=1`. Prints every
+/// template the engine actually loaded (name + type + subtype) to `cosmo_plus.log`; used to
+/// verify that a newly added `.got` template made it into the lobby list.
+pub(crate) fn debug_dump_game_types_once() {
+    static TRIES: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+    static DONE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+    if !crate::config::env_flag("CM_PLUS_DUMP_GAME_TYPES") || DONE.load(std::sync::atomic::Ordering::SeqCst) {
+        return;
+    }
+    // The template list is built during startup; retry across the first ~600 draws.
+    if TRIES.fetch_add(1, std::sync::atomic::Ordering::SeqCst) > 600 {
+        crate::log::log("[cosmo-plus] game types: dump gave up (list never became non-empty)");
+        DONE.store(true, std::sync::atomic::Ordering::SeqCst);
+        return;
+    }
+    let Some(node) = read_game_type_list_head() else {
+        return;
+    };
+    DONE.store(true, std::sync::atomic::Ordering::SeqCst);
+    dump_game_type_list();
+}
+
+fn read_game_type_list_head() -> Option<usize> {
+    let head = unsafe { *(ADDR_GAME_TYPE_LIST as *const usize) };
+    // Null in this list means 0 or a sign-extended negative (the engine checks `jle`).
+    (head >= 0x400000 && head < 0x8000_0000).then_some(head)
+}
+
+/// Walk `g_game_type_list` and log every entry. Shared by the once-guards and the loader
+/// hook (which fires immediately after the list is built).
+pub(crate) fn dump_game_type_list() {
+    let Some(mut n) = read_game_type_list_head() else {
+        crate::log::log("[cosmo-plus] game types: list head null/empty");
+        return;
+    };
+    let mut guard = 0;
+    while n != 0 && guard < 64 {
+        let name = unsafe { read_c_str((n + 8) as *const u8, 63) };
+        let gt = unsafe { *((n + 0x48) as *const u8) };
+        let st = unsafe { *((n + 0x4A) as *const u16) };
+        crate::log::log(&format!(
+            "[cosmo-plus] game type list: name={name:?} type={gt} subtype={st}"
+        ));
+        let next = unsafe { *((n + 4) as *const usize) };
+        if next == 0 || next > 0x8000_0000 {
+            break;
+        }
+        n = next;
+        guard += 1;
+    }
+    crate::log::log("[cosmo-plus] game types: dump complete");
+}
+
+// ---------------------------------------------------------------------------
+// Template-loader hook (CM_PLUS_DUMP_GAME_TYPES only, debug instrumentation).
+//
+// The engine builds `g_game_type_list` once at startup with
+//   push 0x4AB150          ; list-insert callback          (0x004BAC89)
+//   call 0x4AB860          ; enumerate templates.lst + load each .got
+// We replace the 5-byte `call` with a call to our naked wrapper, which runs the original
+// loader and then dumps the freshly built list to the log. This fires before any dialog
+// opens, so the dump shows exactly what the lobby dropdown will contain.
+// ---------------------------------------------------------------------------
+
+/// Addresses of the `call 0x4AB860` instructions to patch. The loader is reached from
+/// two sites: the dialog-init path (0x004DB046) and the one-shot startup path
+/// (0x004BAC8E, whose preceding instruction at 0x004BAC89 is `push 0x4AB150`). Hooking
+/// both guarantees the dump fires at whichever path initialises the list first.
+const ADDR_TEMPLATE_LOAD_CALLS: [usize; 2] = [0x004DB046, 0x004BAC8E];
+/// The original callee (0x4AB860, `ret` convention: the caller pops the pushed callback).
+static ORIG_TEMPLATE_LOADER: u32 = 0x004AB860;
+
+/// Called by the naked wrapper below; dumps the list after the loader returns.
+/// `#[no_mangle]` so the global-asm wrapper can call it directly by symbol
+/// (`_cosmo_plus_after_template_load` under the MSVC naming convention).
+#[no_mangle]
+unsafe extern "C" fn cosmo_plus_after_template_load() {
+    dump_game_type_list();
+}
+
+core::arch::global_asm!(
+    ".global _cosmo_plus_template_load_dump_wrapper",
+    "_cosmo_plus_template_load_dump_wrapper:",
+    "pushad",
+    "call dword ptr [_cosmo_plus_orig_template_loader]",
+    "popad",
+    "call _cosmo_plus_after_template_load",
+    "ret",
+    ".globl _cosmo_plus_orig_template_loader",
+    ".set _cosmo_plus_orig_template_loader, {orig}",
+    orig = const ORIG_TEMPLATE_LOADER,
+);
+
+unsafe extern "C" {
+    fn cosmo_plus_template_load_dump_wrapper();
+}
+
+/// Patch the two `call 0x4AB860` sites to run the dump wrapper after the loader
+/// (only when the dump flag is armed).
+pub(crate) fn install_game_type_dump_hook() {
+    if !crate::config::env_flag("CM_PLUS_DUMP_GAME_TYPES") {
+        return;
+    }
+    let api = crate::plus::api();
+    let wrapper = cosmo_plus_template_load_dump_wrapper as usize;
+    for &site in &ADDR_TEMPLATE_LOAD_CALLS {
+        let first = unsafe { *(site as *const u8) };
+        if first != 0xE8 {
+            crate::log::log(&format!(
+                "[cosmo-plus] game types: call site 0x{site:08X} not as expected (0x{first:02X}); skipped"
+            ));
+            continue;
+        }
+        let rel = (wrapper as i64 - (site as i64 + 5)) as i32;
+        let mut insn = [0u8; 5];
+        insn[0] = 0xE8;
+        insn[1..5].copy_from_slice(&rel.to_le_bytes());
+        let r = unsafe { (api.write_exe_memory)(site, insn.as_ptr(), 5) };
+        crate::log::log(&format!(
+            "[cosmo-plus] game types: hooked template loader at 0x{site:08X} (wrapper 0x{wrapper:08X}, patch={r})"
+        ));
+    }
+}
+
+unsafe fn read_c_str(ptr: *const u8, max: usize) -> String {
+    let mut s = Vec::with_capacity(max);
+    for i in 0..max {
+        let c = *ptr.add(i);
+        if c == 0 {
+            break;
+        }
+        s.push(c);
+    }
+    String::from_utf8_lossy(&s).into_owned()
+}
+
 /// `*g_game_type` (BW/bwdata.h:221). Carries the lobby template's game-type byte into the
 /// match (engine copies it from the selected `templates/*.got` entry at 0x00449882 and it is
 /// part of the synced game data, so every peer reads the same value).

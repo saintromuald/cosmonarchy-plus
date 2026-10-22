@@ -47,6 +47,7 @@ unsafe extern "C" fn tick() {
             if crate::config::env_flag("CM_PLUS_DUMP") {
                 crate::data::dump_csv(&names);
             }
+            crate::antimeta::debug_dump_game_types_once();
             if measure_enabled() {
                 measure_begin();
             }

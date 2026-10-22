@@ -50,11 +50,21 @@ pub(crate) fn install() {
     // tick calls this again as a fallback.
     crate::antimeta::debug_dump_game_types_once();
     // Debug-only: patch the template loader so the list is dumped right after it is built.
-    crate::antimeta::install_game_type_dump_hook();
+    if !crate::config::env_flag("CM_PLUS_NO_TEMPLATE_HOOK") {
+        crate::antimeta::install_game_type_dump_hook();
+    }
     // Draft mode (Mechabellum-style): pick-command hook + pool validation.
     crate::draft::install();
 
-    crate::frame::install();
-    crate::overlay::install();
-    crate::zoom::install_player_zoom_floor();
+    // Bisection kill-switches (diagnostics): each hook can be disabled independently to
+    // isolate a boot-time crash/hang. Off by default (everything installs).
+    if !crate::config::env_flag("CM_PLUS_NO_FRAME_HOOK") {
+        crate::frame::install();
+    }
+    if !crate::config::env_flag("CM_PLUS_NO_DRAW_HOOK") {
+        crate::overlay::install();
+    }
+    if !crate::config::env_flag("CM_PLUS_NO_ZOOM") {
+        crate::zoom::install_player_zoom_floor();
+    }
 }

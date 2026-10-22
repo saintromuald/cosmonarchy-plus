@@ -13,8 +13,8 @@
 //!
 //! Witnesses/replays may wheel from the 200% default down to 100% — 8 notches
 //! of 12.5%. Stock players are held at 200% (no zoom-out). Plus rewrites the
-//! player branch's immediate to 125% — exactly 6 of the witness's 8 notches,
-//! i.e. **3/4 of the observer-mode zoom depth** — with a single 5-byte write
+//! player branch's immediate to **100%** — the exact observer-mode floor, i.e.
+//! the same 8-notch wheel ladder witnesses get — with a single 5-byte write
 //! at plugin load. The witness branch and everything else are untouched.
 //!
 //! Compiled site (widescreen release `gptp.qdp`, MSVC x86):
@@ -31,8 +31,9 @@
 //! before the patch is accepted, so a stray pattern match can never be
 //! written to.
 
-/// Player floor Plus installs: 125% — 3/4 of the observer-mode zoom depth.
-pub const PLAYER_FLOOR_PERCENT: u32 = 125;
+/// Player floor Plus installs: 100% — the full observer-mode (witness/replay) depth,
+/// so players wheel through exactly the same 8-notch ladder as observers.
+pub const PLAYER_FLOOR_PERCENT: u32 = 100;
 /// Witness/replay floor; read-only here, for documentation and tests.
 pub const WITNESS_FLOOR_PERCENT: u32 = 100;
 /// Player floor compiled into the unpatched widescreen `gptp.qdp`.
@@ -184,13 +185,15 @@ mod tests {
     }
 
     #[test]
-    fn encodes_three_quarters_floor_on_the_ladder() {
+    fn encodes_the_full_observer_depth_floor() {
         let b = encode_mov_imm(PLAYER_FLOOR_PERCENT);
-        assert_eq!(b, [0xB8, 0x7D, 0, 0, 0]);
-        // 125% = 6 notches of 12.5% below the 200% default; the witness gets 8.
+        assert_eq!(b, [0xB8, 0x64, 0, 0, 0]);
+        // Observer parity: the player floor equals the witness floor, so players get
+        // the same 8 notches of 12.5% below the 200% default.
+        assert_eq!(PLAYER_FLOOR_PERCENT, WITNESS_FLOOR_PERCENT);
         assert_eq!(
             (STOCK_PLAYER_FLOOR_PERCENT - PLAYER_FLOOR_PERCENT) * 8,
-            (STOCK_PLAYER_FLOOR_PERCENT - WITNESS_FLOOR_PERCENT) * 6
+            (STOCK_PLAYER_FLOOR_PERCENT - WITNESS_FLOOR_PERCENT) * 8
         );
         assert!(PLAYER_FLOOR_PERCENT >= MIN_PERCENT && PLAYER_FLOOR_PERCENT < MAX_PERCENT);
     }

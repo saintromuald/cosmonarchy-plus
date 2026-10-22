@@ -3,7 +3,7 @@
 //! Locates the loaded `gptp.qdp`, verifies the compiled `apply_display_role`
 //! site with [`cosmo_plus_core::zoom::find_site`], and rewrites the player
 //! branch's `mov eax, imm32` once at load. See the core module for the
-//! signature and the "why 125%" rationale.
+//! signature and the observer-parity rationale.
 //!
 //! The patched bytes are in `gptp.qdp`'s read-only `.text`: the rollback
 //! netcode snapshots only writable sections, and zoom is viewer-local, so the

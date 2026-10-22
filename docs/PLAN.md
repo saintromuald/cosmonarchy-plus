@@ -277,3 +277,23 @@ Your cost/tier list via `plus.yml`, shipped as a named ruleset (`plus-classic`,
 `create_unit`-style surface; their speed is taken from the authoritative `flingy.dat` until
 then. The gas-tier *delta* numbers are applied but the in-place-extractor-upgrade feature is
 still to do.
+
+- **Anti-meta as a real lobby game type (this session):**
+  - Reverse-engineered the 1.16.1 template chain: the engine builds `g_game_type_list`
+    from `templates.lst` at startup (loader 0x4AB750, list insert 0x4AB150); the Create
+    Game dropdown lists every entry with subtype 1 (`compile_list` 0x4AAD00);
+    `is_melee_game` (0x4AAFA0) reads the template's mode byte at `.got` 0x49, which is
+    also `g_game_data.victory_condition`. A new template therefore needs **no engine
+    change** — the earlier "needs an engine change" conclusion was wrong.
+  - `tools/make-template.py` now generates a correct `Anti Meta(1).got` (game type **46**,
+    since 45 is Mindshare's; Melee's settings block otherwise untouched; the first byte
+    must stay 3, not the name length — the previous version was wrong on both counts).
+  - `cosmo-variant` stages the template + `templates.lst` entry on every Plus launch
+    (after its `git reset --hard`), so the dropdown shows **Anti Meta** under Unranked and
+    the release repo stays clean.
+  - Plus detects the mode from `*g_game_type == 46` (`enabled()`), no per-client config;
+    `CM_PLUS_MODE`/`plus.yml mode:` remain as explicit override/fallback. Peers without
+    the template are booted by the map-authorisation lookup, so mixed vanilla/Plus lobbies
+    cannot silently desync.
+  - Documented gptp-side cosmetic gaps (blank chat-room "Game Mode" label, Discord
+    "Custom") — see `docs/antimeta-mode-notes.md`.

@@ -56,6 +56,16 @@ const PLAYER_TYPE_HUMAN: u8 = 2;
 /// Number of playable player slots (`PlayerLimit`, BW/structures.h:25).
 const PLAYER_LIMIT: usize = 8;
 
+/// `*g_game_type` (BW/bwdata.h:221). Carries the lobby template's game-type byte into the
+/// match (engine copies it from the selected `templates/*.got` entry at 0x00449882 and it is
+/// part of the synced game data, so every peer reads the same value).
+const ADDR_GAME_TYPE: usize = 0x00596820;
+
+/// Game type byte of the shipped `Anti Meta(1).got` lobby template. Distinct from
+/// `GameType::Unranked` (30) on purpose: the mode must be **selectable in the lobby**, not
+/// silently folded into Unranked. 45 is taken (Mindshare), so Plus uses 46.
+pub(crate) const GAME_TYPE_ANTI_META: u8 = 46;
+
 /// Guarantees the mode is applied once per **game** (not once per process: a player can
 /// return to the menu and start another match without relaunching).
 static LAST_GAME: AtomicUsize = AtomicUsize::new(0);
@@ -174,19 +184,44 @@ unsafe fn apply_roll() {
     }
 }
 
-/// Resolve the mode switch and log the resolved state. `CM_PLUS_MODE` wins over `plus.yml`.
+/// Resolve the mode switch and log the resolved state. Precedence:
+///
+/// 1. `CM_PLUS_MODE` (env or `cosmo_plus.conf`) — explicit and wins over everything,
+///    including the lobby game type. `antimeta`/`on`/`1`/`true` force-enables, any other
+///    value (e.g. `off`/`0`) force-disables — useful for testing an Anti Meta lobby
+///    without the roll.
+/// 2. The lobby game type: a match created with the **Anti Meta** template (`*g_game_type`
+///    == 46) enables the mode automatically. This is the primary, selectable path.
+/// 3. `plus.yml` `mode: antimeta` — the documented fallback for maps/launchers that bypass
+///    the lobby template list. Both clients must agree.
+///
+/// Default off.
 fn enabled() -> bool {
     if let Some(m) = crate::config::env("CM_PLUS_MODE") {
-        let on = m.eq_ignore_ascii_case("antimeta");
-        crate::log::log(&format!("[cosmo-plus] anti-meta: CM_PLUS_MODE={m} -> enabled={on}"));
+        let on = m.eq_ignore_ascii_case("antimeta")
+            || m.eq_ignore_ascii_case("on")
+            || m == "1"
+            || m.eq_ignore_ascii_case("true");
+        crate::log::log(&format!(
+            "[cosmo-plus] anti-meta: CM_PLUS_MODE={m} -> enabled={on} (explicit; overrides the lobby game type)"
+        ));
         return on;
+    }
+    let game_type = unsafe { *(ADDR_GAME_TYPE as *const u8) };
+    if game_type == GAME_TYPE_ANTI_META {
+        crate::log::log(&format!(
+            "[cosmo-plus] anti-meta: lobby game type Anti Meta ({GAME_TYPE_ANTI_META}) -> enabled"
+        ));
+        return true;
     }
     if let Some(m) = crate::plus::config().and_then(|c| c.mode.as_deref()) {
         let on = m.eq_ignore_ascii_case("antimeta");
         crate::log::log(&format!("[cosmo-plus] anti-meta: plus.yml mode={m} -> enabled={on}"));
         return on;
     }
-    crate::log::log("[cosmo-plus] anti-meta: no mode set -> disabled (default off)");
+    crate::log::log(&format!(
+        "[cosmo-plus] anti-meta: game type {game_type}, no mode set -> disabled (default off)"
+    ));
     false
 }
 

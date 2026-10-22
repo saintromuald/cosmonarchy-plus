@@ -38,8 +38,9 @@ command/output here is not done.
 
 ## 3. Anti-meta mode
 
-- [ ] Selectable as its own mode (lobby entry, or documented config fallback if the lobby
-      path is proven impossible).
+- [ ] Selectable as its own mode: the **Anti Meta** entry in the Create Game game-type
+      dropdown (staged `Anti Meta(1).got`, game type 46, via the `cosmonarchy-plus`
+      launcher; `CM_PLUS_MODE`/`plus.yml mode:` remain as explicit override/fallback).
 - [ ] One roll per game, applied to **all** active players identically:
       workers ∈ {4..8}, minerals ∈ {100..300} step 5, gas ∈ {0..125} step 5.
 - [ ] The roll is from the shared/synced RNG (or otherwise identical on both peers); two
@@ -48,6 +49,8 @@ command/output here is not done.
 - [ ] Works with the rollback plugin armed: `tools/crownlink_match.sh` shows `desyncs=0`
       with the mode active.
 - [ ] Replays reproduce the same start.
+- [ ] A client without the staged template is booted from an Anti Meta lobby (no silent
+      mixed-mode match).
 
 ## Cross-cutting
 

@@ -76,9 +76,9 @@ pub(crate) fn debug_dump_game_types_once() {
         DONE.store(true, std::sync::atomic::Ordering::SeqCst);
         return;
     }
-    let Some(node) = read_game_type_list_head() else {
+    if read_game_type_list_head().is_none() {
         return;
-    };
+    }
     DONE.store(true, std::sync::atomic::Ordering::SeqCst);
     dump_game_type_list();
 }
@@ -196,7 +196,7 @@ pub(crate) fn install_game_type_dump_hook() {
         return;
     }
     let api = crate::plus::api();
-    let wrapper = cosmo_plus_template_load_dump_wrapper as usize;
+    let wrapper = cosmo_plus_template_load_dump_wrapper as *const () as usize;
     for &site in &ADDR_TEMPLATE_LOAD_CALLS {
         let first = unsafe { *(site as *const u8) };
         if first != 0xE8 {

@@ -189,6 +189,9 @@ unsafe extern "stdcall" fn draw_hook(surface: *mut core::ffi::c_void, bounds: *m
             core::mem::transmute(old);
         old(surface, bounds);
     }
+    // Draft mode UI (independent of the saturation overlay switch).
+    crate::draft::draw_panel();
+    crate::draft::poll_pick_input();
     draw_pass();
 }
 
@@ -387,6 +390,29 @@ unsafe fn draw_node(n: &NodeState, buf: &mut [u8; 16]) {
 // Low-level 1.16.1 text primitives (custom register ABI; wrapped with PUSHAD/POPAD the
 // same way `bwhelper.h` does, so no register is clobbered).
 // ---------------------------------------------------------------------------
+
+/// Draw a small panel of text lines fixed to the screen (draft UI). Screen space is
+/// expressed as camera-relative world coordinates, so the panel follows the camera.
+/// Read-only: called from the draw pass, so per-client differences are safe.
+pub(crate) unsafe fn draw_text_lines(title: &str, lines: &[String]) {
+    let (cx, cy) = camera();
+    get_color_handle(4); // white
+
+    let title_buf = padded(title);
+    bw_print_xy(title_buf.as_ptr(), cx + 60, cy + 24);
+    for (i, line) in lines.iter().enumerate() {
+        let buf = padded(line);
+        bw_print_xy(buf.as_ptr(), cx + 70, cy + 48 + i as i32 * 14);
+    }
+}
+
+/// NUL-terminated copy of `s` for the C text primitives.
+fn padded(s: &str) -> Vec<u8> {
+    let mut v = Vec::with_capacity(s.len() + 1);
+    v.extend_from_slice(s.as_bytes());
+    v.push(0);
+    v
+}
 
 /// `helper::bw_print_xy` — eax = text, esi = x, [esp] = y (callee cleans the arg).
 #[inline(never)]

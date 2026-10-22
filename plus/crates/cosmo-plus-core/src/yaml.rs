@@ -86,7 +86,9 @@ fn preprocess(input: &str) -> Result<Vec<Line<'_>>, String> {
     Ok(out)
 }
 
-/// Parse a scalar token: strip quotes, otherwise the bare string.
+/// Parse a scalar token: strip quotes, inline lists become lists, otherwise the bare
+/// string. Inline lists support the `[a, b]` and `[a,b]` spellings used by the draft
+/// option tables (`units: [41, 41]`).
 fn parse_scalar(tok: &str) -> Yaml {
     let t = tok.trim();
     if t.len() >= 2 {
@@ -94,6 +96,15 @@ fn parse_scalar(tok: &str) -> Yaml {
         let (open, close) = (b[0], b[t.len() - 1]);
         if (open == b'"' && close == b'"') || (open == b'\'' && close == b'\'') {
             return Yaml::Scalar(t[1..t.len() - 1].to_string());
+        }
+        if open == b'[' && close == b']' {
+            let inner = &t[1..t.len() - 1];
+            let items: Vec<Yaml> = inner
+                .split(',')
+                .map(|part| parse_scalar(part.trim()))
+                .filter(|y| !matches!(y, Yaml::Scalar(s) if s.is_empty()))
+                .collect();
+            return Yaml::List(items);
         }
     }
     Yaml::Scalar(t.to_string())

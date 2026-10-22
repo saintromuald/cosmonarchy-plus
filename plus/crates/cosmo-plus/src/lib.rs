@@ -6,8 +6,10 @@
 
 #![allow(dead_code, non_snake_case)]
 
+mod antimeta;
 mod config;
 mod data;
+mod draft;
 mod frame;
 mod log;
 mod mpqdraft;
@@ -15,8 +17,6 @@ mod overlay;
 mod plugin;
 mod plus;
 mod zoom;
-
-mod antimeta;
 
 /// Bumped when the Plus <-> netcode/handshake surface changes.
 #[no_mangle]

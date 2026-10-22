@@ -19,25 +19,25 @@ A **new game type, "Draft" (type 47)**, added exactly like Anti Meta (46): an
 `Draft(1).got` template (copy of Melee, mode byte 1) + `templates.lst` entry, detected by
 Plus from `*g_game_type == 47`. Type 47 because 45 = Mindshare, 46 = Anti Meta.
 
-Open choice for you:
-- **A. Draft includes the anti-meta start roll** (4–8 workers, 100–300/0–125) — very
-  roguelite: random start + periodic draft. Recommended.
-- B. Draft starts standard, anti-meta stays separate.
-
-Either way the draft loop below is identical.
+**Resolved:** the Draft mode **includes the anti-meta start roll** (4–8 workers,
+100–300/0–125 resources) — random start + periodic draft, maximum roguelite. The draft
+loop below is independent of that choice.
 
 ## 2. The draft loop
 
 - **Cadence:** first draft at **minute 2** of game time, then every 2 minutes. Game time
   = `game->frame_count / 24`; frames are synced, so every peer triggers the same draft at
-  the same frame. No wall clock anywhere.
-- **Window:** the 4-option panel shows for **30 seconds** (non-blocking v1 — the sim keeps
-  running; pausing is a later option, see §7). Players pick with **hotkeys 1–4** (or
-  click, later). No pick within the window = no effect that round (v1; auto-pick is a
-  toggle later).
+  the same frame. No wall clock in the sim.
+- **Window (paused — your choice):** at the trigger frame both peers set the game pause
+  (deterministic: same frame → same pause; the pause flag is snapped state). The panel
+  shows while paused. **1–4 = pick, Esc = skip.** When **both players have responded**
+  (pick or skip), the game unpauses and the picks apply simultaneously (fixed player
+  order 0..7). No timer needed while paused — the countdown is replaced by "waiting for
+  opponent", which sidesteps the wall-clock-determinism problem entirely. An AFK player
+  stalls the game, but standard BW pause rules already give the opponent a manual unpause
+  (which resolves the stalled window as a skip for whoever hasn't answered).
 - **Reveal:** both players see the same 4 options the moment the window opens. Picks are
-  applied **simultaneously at window close** (deterministic fixed order, players 0..7), so
-  nobody gains from picking late.
+  private until both are in, then applied together.
 
 ### Phases (pool tiers)
 
@@ -47,10 +47,10 @@ Either way the draft loop below is identical.
 | 4–5 | 8, 10 min | **Mid** | unit drops (squad of 2–4 units at your town hall), items, economy swings |
 | 6+ | 12+ min | **Late** | temporary buffs (60–120 s), big drops, tech snipes, "ult" options |
 
-The user's rule "past minute 8 you can start having unit drops, items, temporary buffs"
-maps to: drops/items enter at draft 4 (minute 8); temporary buffs at draft 6 (minute 12);
-each tier keeps a couple of lower-tier options so the pool stays mixed (e.g. Mid pool is
-~40% drops, ~30% items, ~20% economy, ~10% early leftovers).
+The rule "past minute 8 you can start having unit drops, items, temporary buffs" maps to:
+drops/items enter at draft 4 (minute 8); temporary buffs at draft 6 (minute 12); each tier
+keeps a couple of lower-tier options so the pool stays mixed (e.g. Mid pool is ~40% drops,
+~30% items, ~20% economy, ~10% early leftovers).
 
 ## 3. Option pool design
 
@@ -158,17 +158,22 @@ live in Plus-owned state that rolls back — see §5.
 
 ## 7. Phased plan with exit criteria
 
-**Spike 0 — command round-trip (the only real unknown).** Register a no-op custom
-ingame command id, send it from a hotkey, verify it arrives as a *synced* command on both
-clients in a CrownLink rollback match (`cosmo_rollback.log` shows the command on both
-sides, `desyncs=0`). One afternoon; everything else is known territory.
-*Exit:* a hotkey press is visible in both clients' logs via the command stream.
+**Spike 0 — pause + command round-trip (the only real unknowns).**
+1. Verify the game pause works under the rollback netcode: pause/unpause a CrownLink match,
+   confirm both peers stay in sync and `desyncs=0` across the pause boundary.
+2. Register a no-op custom ingame command id, send it from a hotkey, verify it arrives as a
+   *synced* command on both clients (`cosmo_rollback.log` shows it on both sides), and —
+   the pause-specific bit — that the command is processed **while paused** (the network
+   loop keeps running; `hook_process_commands` should fire even when `StepObjects` does
+   not).
+*Exit:* a paused match receives a hotkey command on both clients and unpauses cleanly,
+`desyncs=0`. One afternoon; everything else is known territory.
 
-**Phase 1 — draft skeleton, early tier only.** Mode type 47, draft clock, fixed pool of 4
-economy/worker/scout options, 1–4 hotkeys, simultaneous apply, state blob + netcode
-one-liner, replays. *Exit:* `tools/crownlink_match.sh` with the mode active shows
-`desyncs=0` for a 10-minute scripted match with picks on both sides; replay reproduces
-the same picks.
+**Phase 1 — draft skeleton, early tier only.** Mode type 47 (with the anti-meta start
+roll), draft clock, fixed pool of 4 economy/worker/scout options, 1–4/Esc input, pause +
+both-answered unpause, simultaneous apply, state blob + netcode one-liner, replays.
+*Exit:* `tools/crownlink_match.sh` with the mode active shows `desyncs=0` for a 10-minute
+scripted match with picks on both sides; replay reproduces the same picks.
 
 **Phase 2 — mid tier (minute 8+).** Drops (any unit ids + counts, town hall/expansion
 anchor), items as one-shot tokens, reveal effects. Pool data in `plus.yml`.
@@ -178,19 +183,17 @@ anchor), items as one-shot tokens, reveal effects. Pool data in `plus.yml`.
 cooldown buffs via a hook if needed, "ult" drops. *Exit:* a buff expires mid-fight under
 rollback (`desyncs=0`), buffs stack deterministically.
 
-**Phase 4 — curation + AI.** Fill out the per-race-pair tables (this is the human part:
-I can't judge "feels Mechabellum" — the tables live in `plus.yml` so you iterate
-without builds). Computer players pick by a simple deterministic rule (highest-weight
-effect for their race). Optional: pause during the window, click-to-pick, draft history
-panel.
+**Phase 4 — curation + AI.** Fill out the per-race-pair tables (the human part: the
+tables live in `plus.yml` so you iterate without builds). Computer players pick by a
+simple deterministic rule (highest-weight effect for their race). Optional: click-to-pick,
+draft history panel.
 
-## 8. Decisions I need from you
+## 8. Decisions (resolved)
 
-1. **Mode placement:** new "Draft" game type (recommended), or fold the draft into
-   Anti Meta?
-2. **Start:** draft mode with the anti-meta random start (recommended), or standard start?
-3. **Window behaviour:** non-blocking 30 s window with no auto-pick (v1, recommended),
-   auto-pick option 1 on timeout, or pause the sim during the window?
-4. **First draft:** minute 2 (recommended) or minute 0?
-5. **Option pool curation:** do you want to write the per-race-pair tables yourself (I
-   scaffold the YAML + validation), or should I draft an initial set for you to tune?
+1. **Mode placement:** new "Draft" game type (47). ✔
+2. **Start:** anti-meta random start included (random workers/minerals/gas + draft). ✔
+3. **Window behaviour:** pause during the window; 1–4 pick, Esc skip; unpause when both
+   have answered. ✔
+4. **First draft:** minute 2. ✔
+5. **Option curation:** you write the tables; I scaffold the YAML schema, validation and
+   the draw/apply engine with example options. ✔

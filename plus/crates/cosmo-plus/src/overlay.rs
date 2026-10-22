@@ -75,6 +75,20 @@ struct NodeState {
     owner: u8,
     /// The owner's `RaceId` (for the log).
     race: u8,
+    /// True for gas nodes (drawn per-node); mineral fields only feed the depot display.
+    is_gas: bool,
+}
+
+/// One completed town hall's aggregate mineral-line display (SC2-style: the count is
+/// drawn above the base building instead of on every mineral field).
+struct DepotState {
+    x: i32,
+    y: i32,
+    owner: u8,
+    race: u8,
+    assigned: u32,
+    optimal: u32,
+    color: u8,
 }
 
 /// Per-frame cache; recomputed only when the logic frame advances. Scratch vectors are
@@ -82,8 +96,9 @@ struct NodeState {
 struct Cache {
     frame: u32,
     nodes: Vec<NodeState>,
-    scratch_nodes: Vec<(*mut Unit, i32, i32)>,
-    scratch_depots: Vec<(u8, i32, i32)>,
+    depots: Vec<DepotState>,
+    scratch_nodes: Vec<(*mut Unit, i32, i32, u16)>,
+    scratch_depots: Vec<(u8, i32, i32, i32)>, // player, x, y, sprite ptr
     scratch_workers: Vec<(u8, *mut Unit)>,
     /// Last logic frame we wrote a node dump to `cosmo_plus.log` (OCR-free verification).
     last_log: u32,
@@ -97,6 +112,7 @@ static CACHE: Lazy<Mutex<Cache>> = Lazy::new(|| {
     Mutex::new(Cache {
         frame: 0,
         nodes: Vec::new(),
+        depots: Vec::new(),
         scratch_nodes: Vec::new(),
         scratch_depots: Vec::new(),
         scratch_workers: Vec::new(),
@@ -230,7 +246,13 @@ unsafe fn draw_pass() {
 
     let mut buf = [0u8; 16];
     for n in nodes {
-        draw_node(n, &mut buf);
+        if n.is_gas {
+            draw_node(n, &mut buf);
+        }
+    }
+    // SC2-style: the mineral-line count sits above the town hall, not on the fields.
+    for d in &cache.depots {
+        draw_depot(d, &mut buf);
     }
     set_font_handle(core::ptr::null_mut());
 }
@@ -262,10 +284,13 @@ unsafe fn recompute(cache: &mut Cache, frame: u32) {
                 return;
             }
             let p = (*u).flingy.position;
-            cache.scratch_nodes.push((u, p.x as i32, p.y as i32));
+            cache.scratch_nodes.push((u, p.x as i32, p.y as i32, id));
         } else if saturation::DEPOT_IDS.contains(&id) {
             let p = (*u).flingy.position;
-            cache.scratch_depots.push(((*u).player, p.x as i32, p.y as i32));
+            let sprite = (*u).flingy.sprite;
+            cache
+                .scratch_depots
+                .push(((*u).player, p.x as i32, p.y as i32, sprite as i32));
         } else if let Some(tier) = saturation::worker_tier(id) {
             let target = (*u).unit_specific.worker.current_harvest_target;
             cache.scratch_workers.push((tier, target));
@@ -274,7 +299,7 @@ unsafe fn recompute(cache: &mut Cache, frame: u32) {
 
     let local = local_player_id() as u8;
 
-    for &(node, nx, ny) in &cache.scratch_nodes {
+    for &(node, nx, ny, node_id) in &cache.scratch_nodes {
         let mut tier1 = 0u32;
         let mut tier2 = 0u32;
         for &(tier, target) in &cache.scratch_workers {
@@ -290,7 +315,7 @@ unsafe fn recompute(cache: &mut Cache, frame: u32) {
         // Nearest completed depot -> owner + distance; skip nodes with no depot.
         let mut owner = local;
         let mut best_dist2 = i64::MAX;
-        for &(player, dx, dy) in &cache.scratch_depots {
+        for &(player, dx, dy, _) in &cache.scratch_depots {
             let ddx = (dx - nx) as i64;
             let ddy = (dy - ny) as i64;
             let dist2 = ddx * ddx + ddy * ddy;
@@ -328,6 +353,49 @@ unsafe fn recompute(cache: &mut Cache, frame: u32) {
             dist: dist as u32,
             owner,
             race,
+            is_gas: !saturation::is_mineral_field(node_id),
+        });
+    }
+
+    // Aggregate each visible depot's mineral line: assigned workers + summed optima of
+    // the mineral fields it serves (within SERVICE_RADIUS). Drawn above the building.
+    cache.depots.clear();
+    for &(player, dx, dy, sprite_ptr) in &cache.scratch_depots {
+        let sprite = sprite_ptr as *mut bw_dat::structs::Sprite;
+        if sprite.is_null() || (*sprite).visibility_mask == 0 {
+            continue; // depot itself is fogged; nothing to show
+        }
+        let mut assigned = 0u32;
+        let mut optimal = 0u32;
+        for n in &cache.nodes {
+            if n.is_gas || n.owner != player {
+                continue;
+            }
+            let ddx = (n.x - dx) as i64;
+            let ddy = (n.y - dy) as i64;
+            if ddx * ddx + ddy * ddy <= SERVICE_RADIUS_PX * SERVICE_RADIUS_PX {
+                assigned += n.tier1 + n.tier2;
+                optimal += n.optimal;
+            }
+        }
+        if optimal == 0 {
+            continue; // no visible mineral line near this depot
+        }
+        let saturated = assigned >= optimal;
+        let race = player_race(player);
+        let color = if saturated {
+            saturation::race_textcolor(race)
+        } else {
+            text_color::WHITE
+        };
+        cache.depots.push(DepotState {
+            x: dx,
+            y: dy,
+            owner: player,
+            race,
+            assigned,
+            optimal,
+            color,
         });
     }
 
@@ -384,6 +452,20 @@ unsafe fn draw_node(n: &NodeState, buf: &mut [u8; 16]) {
     buf.fill(0);
     let _ = write!(&mut buf[..], "2 {}/{}", n.tier2, n.optimal);
     bw_print_xy(buf.as_ptr(), sx - 10, sy - 14);
+}
+
+/// Draw the SC2-style mineral count above one town hall: `assigned/optimal`, white while
+/// under-saturated, the owner's race colour once saturated.
+unsafe fn draw_depot(d: &DepotState, buf: &mut [u8; 16]) {
+    let (cx, cy) = camera();
+    let sx = d.x - cx;
+    let sy = d.y - cy;
+
+    get_color_handle(d.color);
+
+    buf.fill(0);
+    let _ = write!(&mut buf[..], "{}/{}", d.assigned, d.optimal);
+    bw_print_xy(buf.as_ptr(), sx - 8, sy - 40);
 }
 
 // ---------------------------------------------------------------------------

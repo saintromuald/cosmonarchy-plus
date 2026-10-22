@@ -707,16 +707,56 @@ static QUEUE_GAME_COMMAND_ADDR: u32 = ADDR_QUEUE_GAME_COMMAND as u32;
 /// Register the pick-command hook. Runs once at plugin init (before any match).
 pub(crate) fn install() {
     let api = crate::plus::api();
-    let r = unsafe {
-        (api.hook_ingame_command)(
-            DRAFT_COMMAND_ID as u32,
-            pick_command_hook,
-            Some(draft_command_length),
-        )
-    };
-    crate::log::log(&format!(
-        "[cosmo-plus] draft: registered ingame command hook for id {DRAFT_COMMAND_ID} (result={r})"
-    ));
+    // The samase `hook_ingame_command` path installs a ProcessCommands wrapper on the
+    // FIRST registration ever. aise registers only as a save-fallback, so this was the
+    // first in practice and it broke live in-game commands (mouse/keyboard did nothing
+    // in matches — the wrapper chain around the engine's command processing misfired).
+    // Until that chain is fixed, the draft pick hook is disabled (the draft cannot be
+    // played yet); CM_PLUS_DRAFT_COMMAND_HOOK=1 re-arms it for debugging.
+    if crate::config::env_flag("CM_PLUS_DRAFT_COMMAND_HOOK") {
+        let r = unsafe {
+            (api.hook_ingame_command)(
+                DRAFT_COMMAND_ID as u32,
+                pick_command_hook,
+                Some(draft_command_length),
+            )
+        };
+        crate::log::log(&format!(
+            "[cosmo-plus] draft: registered ingame command hook for id {DRAFT_COMMAND_ID} (result={r})"
+        ));
+    } else {
+        crate::log::log(
+            "[cosmo-plus] draft: command hook DISABLED (CM_PLUS_DRAFT_COMMAND_HOOK unset) — \
+             known to break live in-game input; see draft-mode-notes.md",
+        );
+    }
+
+    // Debug-only: log every command the engine sends (CM_PLUS_DUMP_COMMANDS=1). Used to
+    // diagnose input issues — proves whether local input reaches the command stream.
+    if crate::config::env_flag("CM_PLUS_DUMP_COMMANDS") {
+        static FIRST: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(true);
+        unsafe extern "C" fn send_hook(
+            data: *mut core::ffi::c_void,
+            len: u32,
+            orig: unsafe extern "C" fn(*mut core::ffi::c_void, u32),
+        ) {
+            let id = if len > 0 { *((data as *const u8).add(0)) } else { 0 };
+            crate::log::log(&format!("[cosmo-plus] send_command id=0x{id:02X} len={len}"));
+            if FIRST.load(std::sync::atomic::Ordering::SeqCst) {
+                // Dump the first 8 bytes of the first command as hex.
+                let n = len.min(8) as usize;
+                let bytes = core::slice::from_raw_parts(data as *const u8, n);
+                crate::log::log(&format!(
+                    "[cosmo-plus] send_command first bytes: {}",
+                    bytes.iter().map(|b| format!("{b:02X}")).collect::<Vec<_>>().join(" ")
+                ));
+                FIRST.store(false, std::sync::atomic::Ordering::SeqCst);
+            }
+            orig(data, len);
+        }
+        let r = unsafe { (api.hook_send_command)(send_hook) };
+        crate::log::log(&format!("[cosmo-plus] draft: command send logger installed (result={r})"));
+    }
 
     if let Some(cfg) = crate::plus::config() {
         let pairs = [(0u8, 0u8), (0, 1), (0, 2), (1, 1), (1, 2), (2, 2), (0, 69), (0, 70), (1, 69), (1, 70), (2, 69), (2, 70), (69, 69), (69, 70), (70, 70)];

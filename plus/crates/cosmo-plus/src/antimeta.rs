@@ -131,7 +131,7 @@ pub(crate) fn dump_game_type_list() {
 /// both guarantees the dump fires at whichever path initialises the list first.
 const ADDR_TEMPLATE_LOAD_CALLS: [usize; 2] = [0x004DB046, 0x004BAC8E];
 /// The original callee (0x4AB860, `ret` convention: the caller pops the pushed callback).
-static ORIG_TEMPLATE_LOADER: u32 = 0x004AB860;
+const ORIG_TEMPLATE_LOADER: u32 = 0x004AB860;
 
 /// Called by the naked wrapper below; dumps the list after the loader returns.
 /// `#[no_mangle]` so the global-asm wrapper can call it directly by symbol
@@ -169,7 +169,13 @@ core::arch::global_asm!(
     "mov ecx, [esp + 4]",
     "mov [esp + 4], eax",
     "mov [esp], ecx",
-    "call dword ptr [_cosmo_plus_orig_template_loader]",
+    // Direct call to the loader (0x4AB860) through a register. NEVER
+    // `call dword ptr [abs_symbol]` here: that dereferences memory at the loader's
+    // address (its code bytes read as a pointer -> the historical
+    // `eip 0x81ec8b55` crash). Absolute addresses are rejected as branch operands
+    // by LLVM's assembler, hence mov+call.
+    "mov edx, 0x4AB860",
+    "call edx",
     "push eax",
     "pushfd",
     "call _cosmo_plus_after_template_load",
@@ -180,9 +186,6 @@ core::arch::global_asm!(
     "mov [esp], edx",
     "mov [esp + 4], ecx",
     "ret",
-    ".globl _cosmo_plus_orig_template_loader",
-    ".set _cosmo_plus_orig_template_loader, {orig}",
-    orig = const ORIG_TEMPLATE_LOADER,
 );
 
 unsafe extern "C" {

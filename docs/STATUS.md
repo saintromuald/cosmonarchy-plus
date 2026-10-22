@@ -74,8 +74,20 @@ phase lands.
   mode on logs `replay detected -> skipped` and changes nothing.
   See `docs/antimeta-mode-notes.md` §Implemented.
 - **Still to verify in a live lobby:** the dropdown entry, one roll on both peers via
-  CrownLink (`desyncs=0`), and the vanilla-client boot. Same acceptance items as before;
-  the mechanism is now in place end to end.
+  CrownLink (`desyncs=0`), and the vanilla-client boot. The mechanism is in place end to
+  end; two items are pending real-world confirmation:
+  - **Template visibility in the engine's list.** Registry-selection tests on this machine
+    showed the game's template list follows `templates.lst` edits but did **not** pick up
+    the added `.got` (a `Custom Type` registry value of `Anti Meta` fell back to the
+    default while `Massacre`/`Mindshare` matched). The `.got` was verified packed into
+    `temp.mpq` (byte-level), so the open question is whether the protected hotloader
+    resolves *new* files by hash. `CM_PLUS_DUMP_GAME_TYPES=1` + the template-loader hooks
+    (0x004DB046/0x004BAC8E) answer this from inside the engine: the next game boot logs
+    the full `g_game_type_list`. If `Anti Meta` is absent there, the template must be
+    shipped through Fraud Launcher 2 (the release repo commit is prepared: branch `plus`,
+    `311e7cc` in the local cosmonarchy-bw-release checkout), not just staged as a loose
+    file.
+  - **Full CrownLink lobby test** with the mode selected from the dropdown.
 
 ## 4. Player zoom-out floor — 3/4 of witness depth — DONE and verified in a live boot
 

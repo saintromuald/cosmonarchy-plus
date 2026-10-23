@@ -67,4 +67,8 @@ pub(crate) fn install() {
     if !crate::config::env_flag("CM_PLUS_NO_ZOOM") {
         crate::zoom::install_player_zoom_floor();
     }
+
+    // Idle-worker hotkey (F9 by default; see idle_workers.rs). Independent of the
+    // overlay switch — it is polled from the draw hook, so it needs that hook.
+    crate::idle_workers::install();
 }

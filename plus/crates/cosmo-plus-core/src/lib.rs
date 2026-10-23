@@ -13,6 +13,7 @@ pub mod antimeta;
 pub mod config;
 pub mod draft;
 pub mod hotkeys;
+pub mod larva;
 pub mod saturation;
 pub mod yaml;
 pub mod zoom;

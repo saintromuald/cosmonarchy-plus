@@ -41,6 +41,11 @@ replay on vanilla Cosmonarchy.
 6. **Saturation labels in the small font** — the per-node and town-hall counts
    draw with `font_base[0]` (`FONT_SMALL`) instead of the standard in-game font;
    `CM_PLUS_OVERLAY_FONT=std` restores the previous look.
+7. **Larva picker** — select hatcheries, press the key (default **F12**), type a
+   count (1–99, clamped to 12), Enter or the 2 s timeout → exactly that many larva
+   are selected through the engine's selection routine (network-synced). No digits
+   = select all. Digit keys are swallowed during entry so control groups never
+   fire. Configure with `CM_PLUS_LARVA_KEY` in `cosmo_plus.conf`.
 
 ## Build & install
 

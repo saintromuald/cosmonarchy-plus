@@ -19,13 +19,8 @@
 
 use std::sync::atomic::{AtomicU16, Ordering};
 
-use bw_dat::structs::Unit;
-
 use cosmo_plus_core::hotkeys::{parse_key, DEFAULT_IDLE_WORKER_KEY};
 use cosmo_plus_core::saturation::worker_tier;
-
-/// The engine's click-selection routine (BW/bwhelper.cpp `select_units_if_alt_not_held`).
-const ADDR_SELECT_UNITS: usize = 0x0046FA00;
 
 /// How many units one selection can hold (`SelectionCap`).
 const SELECTION_CAP: usize = 12;
@@ -88,7 +83,8 @@ pub(crate) unsafe fn poll() {
     let Some(local) = local_player() else {
         return;
     };
-    let mut list: [*mut Unit; SELECTION_CAP] = [core::ptr::null_mut(); SELECTION_CAP];
+    let mut list: [*mut bw_dat::structs::Unit; SELECTION_CAP] =
+        [core::ptr::null_mut(); SELECTION_CAP];
     let mut n = 0usize;
     crate::frame::for_each_unit(|u| {
         if n >= SELECTION_CAP {
@@ -114,36 +110,5 @@ pub(crate) unsafe fn poll() {
         return;
     }
     crate::log::log(&format!("[cosmo-plus] idle workers: selecting {n}"));
-    select_units_if_alt_not_held(list.as_ptr(), n as u32, 1, 1);
-}
-
-/// `helper::select_units_if_alt_not_held` (0x0046FA00): EBX = unit list, EDI = length,
-/// [esp] = play_sound, [esp+4] = send_command (callee cleans the two stack args).
-///
-/// The call target is referenced through a static (`call dword ptr [sym]`), and the
-/// register args use named registers — a plain `in(reg)` operand could be allocated to
-/// EDI/EBX and then be clobbered by the other operand's load (this exact bug shipped
-/// once and turned the call into `call <len>`).
-static SELECT_UNITS_ADDR: u32 = ADDR_SELECT_UNITS as u32;
-
-#[inline(never)]
-unsafe fn select_units_if_alt_not_held(
-    list: *const *mut Unit,
-    len: u32,
-    play_sound: u32,
-    send_command: u32,
-) {
-    core::arch::asm!(
-        "pushad",
-        "push {send}",
-        "push {sound}",
-        "call dword ptr [{func}]",
-        "popad",
-        in("ebx") list as u32,
-        in("edi") len,
-        sound = in(reg) play_sound,
-        send = in(reg) send_command,
-        func = sym SELECT_UNITS_ADDR,
-        options(nostack),
-    );
+    crate::select::select_units_if_alt_not_held(list.as_ptr(), n as u32, 1, 1);
 }

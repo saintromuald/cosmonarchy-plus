@@ -12,11 +12,13 @@ mod data;
 mod draft;
 mod frame;
 mod idle_workers;
+mod larva_pick;
 mod log;
 mod mpqdraft;
 mod overlay;
 mod plugin;
 mod plus;
+mod select;
 mod zoom;
 
 /// Bumped when the Plus <-> netcode/handshake surface changes.

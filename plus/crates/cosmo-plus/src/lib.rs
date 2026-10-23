@@ -11,6 +11,7 @@ mod config;
 mod data;
 mod draft;
 mod frame;
+mod idle_workers;
 mod log;
 mod mpqdraft;
 mod overlay;

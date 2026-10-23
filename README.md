@@ -33,6 +33,14 @@ replay on vanilla Cosmonarchy.
    `apply_display_role` in `gptp.qdp`, verified against the clamp signature
    before it is written. Override with `CM_PLUS_ZOOM_PLAYER_MIN` (percent,
    100–300) in `cosmo_plus.conf`. See `docs/zoom-floor.md`.
+5. **Idle-worker hotkey** — one key press selects every idle worker of the local
+   player through the engine's own selection routine (network-synced). Default
+   **F9** (unbound in the game and the mod); configure with
+   `CM_PLUS_IDLE_WORKER_KEY` in `cosmo_plus.conf` (named keys like `F12`/`SPACE`,
+   letters, digits, or a hex virtual-key code like `0x7A`).
+6. **Saturation labels in the small font** — the per-node and town-hall counts
+   draw with `font_base[0]` (`FONT_SMALL`) instead of the standard in-game font;
+   `CM_PLUS_OVERLAY_FONT=std` restores the previous look.
 
 ## Build & install
 

@@ -28,8 +28,12 @@ use cosmo_plus_core::saturation::text_color;
 // ---------------------------------------------------------------------------
 /// The game draw proc operand (`g_draw_game_proc`), patched by GPTP's draw_hook.cpp.
 const DRAW_GAME_PROC_PTR: usize = 0x004BD68D;
-/// `font_base` (`graphics::Font**`); `font_base[1]` is the in-game font.
+/// `font_base` (`graphics::Font**`); `font_base[0]` is the small font
+/// (`graphics::FONT_SMALL`), `font_base[1]` the standard in-game font.
 const FONT_BASE: usize = 0x006CE0F4;
+/// Which font the overlay labels use: 0 = small (`FONT_SMALL`, default), 1 = standard
+/// in-game font (`CM_PLUS_OVERLAY_FONT=std` restores the previous look).
+static FONT_INDEX: AtomicUsize = AtomicUsize::new(0);
 /// `g_draw_text` (Box16: left/top/right/bottom, i16 each) — the text clip box.
 const G_DRAW_TEXT: usize = 0x006CE0C8;
 /// `g_print_xy_alignment` (u8).
@@ -126,6 +130,24 @@ pub(crate) fn install() {
     ENABLED.store(enabled, Ordering::SeqCst);
     crate::log::log(&format!("[cosmo-plus] overlay: enabled={enabled}"));
 
+    // Overlay label font: the small font (font_base[0], graphics::FONT_SMALL) by
+    // default, the standard in-game font (font_base[1]) with CM_PLUS_OVERLAY_FONT=std.
+    let idx = match crate::config::env("CM_PLUS_OVERLAY_FONT").as_deref() {
+        Some(v) if v.eq_ignore_ascii_case("std") => 1,
+        Some(v) if !v.eq_ignore_ascii_case("small") => {
+            crate::log::log(&format!(
+                "[cosmo-plus] overlay: unknown CM_PLUS_OVERLAY_FONT={v:?}; using small"
+            ));
+            0
+        }
+        _ => 0,
+    };
+    FONT_INDEX.store(idx, Ordering::SeqCst);
+    crate::log::log(&format!(
+        "[cosmo-plus] overlay: label font = font_base[{idx}] ({})",
+        if idx == 0 { "small" } else { "std" }
+    ));
+
     if let Some(v) = crate::config::env("CM_PLUS_SATURATION_OPT_CAP") {
         if let Ok(n) = v.parse::<u32>() {
             OPT_CAP.store(n as usize, Ordering::SeqCst);
@@ -208,6 +230,9 @@ unsafe extern "stdcall" fn draw_hook(surface: *mut core::ffi::c_void, bounds: *m
     // Draft mode UI (independent of the saturation overlay switch).
     crate::draft::draw_panel();
     crate::draft::poll_pick_input();
+    // Idle-worker hotkey (also independent of the saturation switch; needs the draw
+    // hook, which is installed regardless).
+    crate::idle_workers::poll();
     draw_pass();
 }
 
@@ -543,10 +568,11 @@ unsafe fn set_font_handle(font: *mut u32) {
 // State readers.
 // ---------------------------------------------------------------------------
 
-/// The in-game font handle (`font_base[1]`), or null if not initialised.
+/// The overlay label font handle (`font_base[FONT_INDEX]`), or null if not initialised.
 unsafe fn in_game_font() -> *mut u32 {
     let font_base = FONT_BASE as *const *const u32;
-    *font_base.add(1) as *mut u32
+    let idx = FONT_INDEX.load(Ordering::SeqCst);
+    *font_base.add(idx) as *mut u32
 }
 
 /// The current camera position in world px. `g_screen_x` is `(s32*)0x00628448` (a constant

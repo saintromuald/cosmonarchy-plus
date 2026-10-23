@@ -1,0 +1,1142 @@
+[
+ {
+  "slot": 0,
+  "vanilla": "Terran Marine",
+  "cosmo": "Terran Maverick"
+ },
+ {
+  "slot": 1,
+  "vanilla": "Terran Ghost",
+  "cosmo": "Terran Eidolon"
+ },
+ {
+  "slot": 2,
+  "vanilla": "Terran Vulture",
+  "cosmo": "Terran Vulture"
+ },
+ {
+  "slot": 3,
+  "vanilla": "Terran Goliath",
+  "cosmo": "Terran Goliath"
+ },
+ {
+  "slot": 4,
+  "vanilla": "Terran Goliath Turret",
+  "cosmo": "Goliath Turret"
+ },
+ {
+  "slot": 5,
+  "vanilla": "Terran Siege Tank Tank Mode",
+  "cosmo": "Terran Phalanx (Tank Mode)"
+ },
+ {
+  "slot": 6,
+  "vanilla": "Terran Siege Tank Tank Mode Turret",
+  "cosmo": "Phalanx Turret (Tank Mode)"
+ },
+ {
+  "slot": 7,
+  "vanilla": "Terran SCV",
+  "cosmo": "Terran Mason"
+ },
+ {
+  "slot": 8,
+  "vanilla": "Terran Wraith",
+  "cosmo": "Terran Wraith"
+ },
+ {
+  "slot": 9,
+  "vanilla": "Terran Science Vessel",
+  "cosmo": "Terran Seraph"
+ },
+ {
+  "slot": 10,
+  "vanilla": "Hero Gui Montag",
+  "cosmo": "Terran Apostle"
+ },
+ {
+  "slot": 11,
+  "vanilla": "Terran Dropship",
+  "cosmo": "Terran Trojan"
+ },
+ {
+  "slot": 12,
+  "vanilla": "Terran Battlecruiser",
+  "cosmo": "Terran Minotaur"
+ },
+ {
+  "slot": 13,
+  "vanilla": "Terran Vulture Spider Mine",
+  "cosmo": "Spider Mine"
+ },
+ {
+  "slot": 14,
+  "vanilla": "Terran Nuclear Missile",
+  "cosmo": "Terran Morningstar"
+ },
+ {
+  "slot": 15,
+  "vanilla": "Terran Civilian",
+  "cosmo": "Terran Shaman (Support Mode)"
+ },
+ {
+  "slot": 16,
+  "vanilla": "Hero Sarah Kerrigan",
+  "cosmo": "Protoss Manifold"
+ },
+ {
+  "slot": 17,
+  "vanilla": "Hero Alan Schezar",
+  "cosmo": "Protoss Architect"
+ },
+ {
+  "slot": 18,
+  "vanilla": "Hero Alan Schezar Turret",
+  "cosmo": "Terran Madcap"
+ },
+ {
+  "slot": 19,
+  "vanilla": "Hero Jim Raynor Vulture",
+  "cosmo": "Terran Cuirass (Tank Mode)"
+ },
+ {
+  "slot": 20,
+  "vanilla": "Hero Jim Raynor Marine",
+  "cosmo": "Terran Talos"
+ },
+ {
+  "slot": 21,
+  "vanilla": "Hero Tom Kazansky",
+  "cosmo": "Protoss Star Sovereign"
+ },
+ {
+  "slot": 22,
+  "vanilla": "Hero Magellan",
+  "cosmo": "Terran Salamander"
+ },
+ {
+  "slot": 23,
+  "vanilla": "Hero Edmund Duke Tank Mode",
+  "cosmo": "Terran Gorgon"
+ },
+ {
+  "slot": 24,
+  "vanilla": "Hero Edmund Duke Tank Mode Turret",
+  "cosmo": "Terran Phobos"
+ },
+ {
+  "slot": 25,
+  "vanilla": "Hero Edmund Duke Siege Mode",
+  "cosmo": "Protoss Gladius"
+ },
+ {
+  "slot": 26,
+  "vanilla": "Hero Edmund Duke Siege Mode Turret",
+  "cosmo": "Protoss Magister"
+ },
+ {
+  "slot": 27,
+  "vanilla": "Hero Arcturus Mengsk",
+  "cosmo": "Terran Madrigal (Imperioso Mode)"
+ },
+ {
+  "slot": 28,
+  "vanilla": "Hero Hyperion",
+  "cosmo": "Terran Centaur"
+ },
+ {
+  "slot": 29,
+  "vanilla": "Hero Norad II",
+  "cosmo": "Zerg Almaksalisk"
+ },
+ {
+  "slot": 30,
+  "vanilla": "Terran Siege Tank Siege Mode",
+  "cosmo": "Terran Phalanx (Siege Mode)"
+ },
+ {
+  "slot": 31,
+  "vanilla": "Terran Siege Tank Siege Mode Turret",
+  "cosmo": "Phalanx Turret (Siege Mode)"
+ },
+ {
+  "slot": 32,
+  "vanilla": "Terran Firebat",
+  "cosmo": "Terran Harakan"
+ },
+ {
+  "slot": 33,
+  "vanilla": "Spell Scanner Sweep",
+  "cosmo": "Scanner Sweep"
+ },
+ {
+  "slot": 34,
+  "vanilla": "Terran Medic",
+  "cosmo": "Terran Cleric"
+ },
+ {
+  "slot": 35,
+  "vanilla": "Zerg Larva",
+  "cosmo": "Zerg Larva"
+ },
+ {
+  "slot": 36,
+  "vanilla": "Zerg Egg",
+  "cosmo": "Zerg Egg"
+ },
+ {
+  "slot": 37,
+  "vanilla": "Zerg Zergling",
+  "cosmo": "Zerg Zethrokor"
+ },
+ {
+  "slot": 38,
+  "vanilla": "Zerg Hydralisk",
+  "cosmo": "Zerg Hydralisk"
+ },
+ {
+  "slot": 39,
+  "vanilla": "Zerg Ultralisk",
+  "cosmo": "Zerg Ultrokor"
+ },
+ {
+  "slot": 40,
+  "vanilla": "Zerg Broodling",
+  "cosmo": "Zerg Rilirokor"
+ },
+ {
+  "slot": 41,
+  "vanilla": "Zerg Drone",
+  "cosmo": "Zerg Droleth"
+ },
+ {
+  "slot": 42,
+  "vanilla": "Zerg Overlord",
+  "cosmo": "Zerg Ovileth"
+ },
+ {
+  "slot": 43,
+  "vanilla": "Zerg Mutalisk",
+  "cosmo": "Zerg Mutalisk"
+ },
+ {
+  "slot": 44,
+  "vanilla": "Zerg Guardian",
+  "cosmo": "Zerg Geszithalor"
+ },
+ {
+  "slot": 45,
+  "vanilla": "Zerg Queen",
+  "cosmo": "Zerg Matraleth"
+ },
+ {
+  "slot": 46,
+  "vanilla": "Zerg Defiler",
+  "cosmo": "Zerg Isthrathaleth"
+ },
+ {
+  "slot": 47,
+  "vanilla": "Zerg Scourge",
+  "cosmo": null
+ },
+ {
+  "slot": 48,
+  "vanilla": "Hero Torrasque",
+  "cosmo": "Zerg Alkajelisk"
+ },
+ {
+  "slot": 49,
+  "vanilla": "Hero Matriarch",
+  "cosmo": "Terran Pazuzu"
+ },
+ {
+  "slot": 50,
+  "vanilla": "Zerg Infested Terran",
+  "cosmo": "Terran Cohort"
+ },
+ {
+  "slot": 51,
+  "vanilla": "Hero Infested Kerrigan",
+  "cosmo": "Zerg Kalkalisk"
+ },
+ {
+  "slot": 52,
+  "vanilla": "Hero Unclean One",
+  "cosmo": "Zerg Evigrilisk"
+ },
+ {
+  "slot": 53,
+  "vanilla": "Hero Hunter Killer",
+  "cosmo": "Terran Penumbra"
+ },
+ {
+  "slot": 54,
+  "vanilla": "Hero Devouring One",
+  "cosmo": "Zerg Nathrokor"
+ },
+ {
+  "slot": 55,
+  "vanilla": "Hero Kukulza Mutalisk",
+  "cosmo": "Terran Cyclops"
+ },
+ {
+  "slot": 56,
+  "vanilla": "Hero Kukulza Guardian",
+  "cosmo": "Zerg Gorgrokor"
+ },
+ {
+  "slot": 57,
+  "vanilla": "Hero Yggdrasill",
+  "cosmo": "Zerg Othstoleth"
+ },
+ {
+  "slot": 58,
+  "vanilla": "Terran Valkyrie",
+  "cosmo": "Terran Valkyrie"
+ },
+ {
+  "slot": 59,
+  "vanilla": "Zerg Cocoon",
+  "cosmo": "Zerg Cocoon"
+ },
+ {
+  "slot": 60,
+  "vanilla": "Protoss Corsair",
+  "cosmo": "Protoss Lanifect"
+ },
+ {
+  "slot": 61,
+  "vanilla": "Protoss Dark Templar",
+  "cosmo": "Protoss Cabalist"
+ },
+ {
+  "slot": 62,
+  "vanilla": "Zerg Devourer",
+  "cosmo": "Zerg Vithrilisk"
+ },
+ {
+  "slot": 63,
+  "vanilla": "Protoss Dark Archon",
+  "cosmo": "Protoss Mind Tyrant"
+ },
+ {
+  "slot": 64,
+  "vanilla": "Protoss Probe",
+  "cosmo": "Protoss Scribe"
+ },
+ {
+  "slot": 65,
+  "vanilla": "Protoss Zealot",
+  "cosmo": "Protoss Zealot"
+ },
+ {
+  "slot": 66,
+  "vanilla": "Protoss Dragoon",
+  "cosmo": "Protoss Dracadin"
+ },
+ {
+  "slot": 67,
+  "vanilla": "Protoss High Templar",
+  "cosmo": "Protoss Cantavis"
+ },
+ {
+  "slot": 68,
+  "vanilla": "Protoss Archon",
+  "cosmo": "Protoss Archon"
+ },
+ {
+  "slot": 69,
+  "vanilla": "Protoss Shuttle",
+  "cosmo": "Protoss Envoy"
+ },
+ {
+  "slot": 70,
+  "vanilla": "Protoss Scout",
+  "cosmo": "Protoss Panoptus"
+ },
+ {
+  "slot": 71,
+  "vanilla": "Protoss Arbiter",
+  "cosmo": "Protoss Didact"
+ },
+ {
+  "slot": 72,
+  "vanilla": "Protoss Carrier",
+  "cosmo": "Protoss Solarion"
+ },
+ {
+  "slot": 73,
+  "vanilla": "Protoss Interceptor",
+  "cosmo": "Protoss Steward"
+ },
+ {
+  "slot": 74,
+  "vanilla": "Hero Dark Templar",
+  "cosmo": "Protoss Legionnaire"
+ },
+ {
+  "slot": 75,
+  "vanilla": "Hero Zeratul",
+  "cosmo": "Protoss Amaranth"
+ },
+ {
+  "slot": 76,
+  "vanilla": "Hero Tassadar Zeratul Archon",
+  "cosmo": "Protoss Hierophant"
+ },
+ {
+  "slot": 77,
+  "vanilla": "Hero Fenix Zealot",
+  "cosmo": "Terran Heracles"
+ },
+ {
+  "slot": 78,
+  "vanilla": "Hero Fenix Dragoon",
+  "cosmo": "Protoss Atreus"
+ },
+ {
+  "slot": 79,
+  "vanilla": "Hero Tassadar",
+  "cosmo": "Protoss Ecclesiast"
+ },
+ {
+  "slot": 80,
+  "vanilla": "Hero Mojo",
+  "cosmo": "Protoss Aurora"
+ },
+ {
+  "slot": 81,
+  "vanilla": "Hero Warbringer",
+  "cosmo": "Protoss Clarion"
+ },
+ {
+  "slot": 82,
+  "vanilla": "Hero Gantrithor",
+  "cosmo": "Protoss Empyrean"
+ },
+ {
+  "slot": 83,
+  "vanilla": "Protoss Reaver",
+  "cosmo": "Protoss Accantor (deprecated)"
+ },
+ {
+  "slot": 84,
+  "vanilla": "Protoss Observer",
+  "cosmo": "Protoss Witness"
+ },
+ {
+  "slot": 85,
+  "vanilla": "Protoss Scarab",
+  "cosmo": "Protoss Plasma Shell (deprecated)"
+ },
+ {
+  "slot": 86,
+  "vanilla": "Hero Danimoth",
+  "cosmo": "Protoss Demiurge"
+ },
+ {
+  "slot": 87,
+  "vanilla": "Hero Aldaris",
+  "cosmo": "Protoss Pariah"
+ },
+ {
+  "slot": 88,
+  "vanilla": "Hero Artanis",
+  "cosmo": "Tassadar (Heroes)"
+ },
+ {
+  "slot": 89,
+  "vanilla": "Critter Rhynadon",
+  "cosmo": "Protoss Simulacrum"
+ },
+ {
+  "slot": 90,
+  "vanilla": "Critter Bengalaas",
+  "cosmo": "Protoss Charlatan"
+ },
+ {
+  "slot": 91,
+  "vanilla": "Special Cargo Ship",
+  "cosmo": "Terran Wyvern"
+ },
+ {
+  "slot": 92,
+  "vanilla": "Special Mercenary Gunship",
+  "cosmo": "Terran Cyprian"
+ },
+ {
+  "slot": 93,
+  "vanilla": "Critter Scantid",
+  "cosmo": "Zerg Rililisk"
+ },
+ {
+  "slot": 94,
+  "vanilla": "Critter Kakaru",
+  "cosmo": "Protoss Exemplar"
+ },
+ {
+  "slot": 95,
+  "vanilla": "Critter Ragnasaur",
+  "cosmo": "Zerg Quazilisk"
+ },
+ {
+  "slot": 96,
+  "vanilla": "Critter Ursadon",
+  "cosmo": "Zerg Keskathalor"
+ },
+ {
+  "slot": 97,
+  "vanilla": "Zerg Lurker Egg",
+  "cosmo": "Zerg Zoryusthaleth"
+ },
+ {
+  "slot": 98,
+  "vanilla": "Hero Raszagal",
+  "cosmo": "Terran Azazel"
+ },
+ {
+  "slot": 99,
+  "vanilla": "Hero Samir Duran",
+  "cosmo": "Protoss Idol"
+ },
+ {
+  "slot": 100,
+  "vanilla": "Hero Alexei Stukov",
+  "cosmo": "Protoss Golem"
+ },
+ {
+  "slot": 101,
+  "vanilla": "Special Map Revealer",
+  "cosmo": null
+ },
+ {
+  "slot": 102,
+  "vanilla": "Hero Gerard DuGalle",
+  "cosmo": "Protoss Augur"
+ },
+ {
+  "slot": 103,
+  "vanilla": "Zerg Lurker",
+  "cosmo": "Zerg Lakizilisk"
+ },
+ {
+  "slot": 104,
+  "vanilla": "Hero Infested Duran",
+  "cosmo": "Protoss Barghest"
+ },
+ {
+  "slot": 105,
+  "vanilla": "Spell Disruption Web",
+  "cosmo": "Carapace Swarm (Small)"
+ },
+ {
+  "slot": 106,
+  "vanilla": "Terran Command Center",
+  "cosmo": "Terran Ministry"
+ },
+ {
+  "slot": 107,
+  "vanilla": "Terran Comsat Station",
+  "cosmo": "Terran Comsat Station"
+ },
+ {
+  "slot": 108,
+  "vanilla": "Terran Nuclear Silo",
+  "cosmo": "Terran Anvil"
+ },
+ {
+  "slot": 109,
+  "vanilla": "Terran Supply Depot",
+  "cosmo": "Terran Supply Depot"
+ },
+ {
+  "slot": 110,
+  "vanilla": "Terran Refinery",
+  "cosmo": "Terran Reservoir"
+ },
+ {
+  "slot": 111,
+  "vanilla": "Terran Barracks",
+  "cosmo": "Terran Stockade"
+ },
+ {
+  "slot": 112,
+  "vanilla": "Terran Academy",
+  "cosmo": "Zerg Liiralisk"
+ },
+ {
+  "slot": 113,
+  "vanilla": "Terran Factory",
+  "cosmo": "Terran Fulcrum"
+ },
+ {
+  "slot": 114,
+  "vanilla": "Terran Starport",
+  "cosmo": "Terran Starport"
+ },
+ {
+  "slot": 115,
+  "vanilla": "Terran Control Tower",
+  "cosmo": "Terran Commandment"
+ },
+ {
+  "slot": 116,
+  "vanilla": "Terran Science Facility",
+  "cosmo": "Terran Daedala"
+ },
+ {
+  "slot": 117,
+  "vanilla": "Terran Covert Ops",
+  "cosmo": "Terran Covenant"
+ },
+ {
+  "slot": 118,
+  "vanilla": "Terran Physics Lab",
+  "cosmo": "Terran Magnetar"
+ },
+ {
+  "slot": 119,
+  "vanilla": "Unused Terran1",
+  "cosmo": "Terran Vestry"
+ },
+ {
+  "slot": 120,
+  "vanilla": "Terran Machine Shop",
+  "cosmo": "Terran Palladium"
+ },
+ {
+  "slot": 121,
+  "vanilla": "Unused Terran2",
+  "cosmo": "Terran Rotary"
+ },
+ {
+  "slot": 122,
+  "vanilla": "Terran Engineering Bay",
+  "cosmo": "Terran Atlas"
+ },
+ {
+  "slot": 123,
+  "vanilla": "Terran Armory",
+  "cosmo": "Zerg Sovroleth"
+ },
+ {
+  "slot": 124,
+  "vanilla": "Terran Missile Turret",
+  "cosmo": "Terran Watchdog"
+ },
+ {
+  "slot": 125,
+  "vanilla": "Terran Bunker",
+  "cosmo": "Terran Anchor"
+ },
+ {
+  "slot": 126,
+  "vanilla": "Special Crashed Norad II",
+  "cosmo": "Zerg Kagralisk"
+ },
+ {
+  "slot": 127,
+  "vanilla": "Special Ion Cannon",
+  "cosmo": "Terran Diadem"
+ },
+ {
+  "slot": 128,
+  "vanilla": "Powerup Uraj Crystal",
+  "cosmo": "Zerg Vorvrokor"
+ },
+ {
+  "slot": 129,
+  "vanilla": "Powerup Khalis Crystal",
+  "cosmo": "Zerg Bactalisk"
+ },
+ {
+  "slot": 130,
+  "vanilla": "Zerg Infested Command Center",
+  "cosmo": "Zerg Axtoth Axis"
+ },
+ {
+  "slot": 131,
+  "vanilla": "Zerg Hatchery",
+  "cosmo": "Zerg Hachirosk"
+ },
+ {
+  "slot": 132,
+  "vanilla": "Zerg Lair",
+  "cosmo": "Zerg Caphrolosk"
+ },
+ {
+  "slot": 133,
+  "vanilla": "Zerg Hive",
+  "cosmo": "Zerg Gathtelosk"
+ },
+ {
+  "slot": 134,
+  "vanilla": "Zerg Nydus Canal",
+  "cosmo": "Zerg Nydus Cesiant"
+ },
+ {
+  "slot": 135,
+  "vanilla": "Zerg Hydralisk Den",
+  "cosmo": "Zerg Hydrith Den"
+ },
+ {
+  "slot": 136,
+  "vanilla": "Zerg Defiler Mound",
+  "cosmo": "Zerg Rakzogth Roost"
+ },
+ {
+  "slot": 137,
+  "vanilla": "Zerg Greater Spire",
+  "cosmo": "Terran Olympian"
+ },
+ {
+  "slot": 138,
+  "vanilla": "Zerg Queens Nest",
+  "cosmo": "Zerg Matravil Nest"
+ },
+ {
+  "slot": 139,
+  "vanilla": "Zerg Evolution Chamber",
+  "cosmo": "Zerg Almakis Antre"
+ },
+ {
+  "slot": 140,
+  "vanilla": "Zerg Ultralisk Cavern",
+  "cosmo": "Zerg Ulgorg Cavern"
+ },
+ {
+  "slot": 141,
+  "vanilla": "Zerg Spire",
+  "cosmo": "Zerg Mutath Spire"
+ },
+ {
+  "slot": 142,
+  "vanilla": "Zerg Spawning Pool",
+  "cosmo": "Zerg Quazeth Pool"
+ },
+ {
+  "slot": 143,
+  "vanilla": "Zerg Creep Colony",
+  "cosmo": "Zerg Cagrant Cesiant"
+ },
+ {
+  "slot": 144,
+  "vanilla": "Zerg Spore Colony",
+  "cosmo": "Zerg Spraith Cesiant"
+ },
+ {
+  "slot": 145,
+  "vanilla": "Unused Zerg1",
+  "cosmo": "Terran Autocrat"
+ },
+ {
+  "slot": 146,
+  "vanilla": "Zerg Sunken Colony",
+  "cosmo": "Zerg Surkith Cesiant"
+ },
+ {
+  "slot": 147,
+  "vanilla": "Special Overmind With Shell",
+  "cosmo": "Terran Guildhall"
+ },
+ {
+  "slot": 148,
+  "vanilla": "Special Overmind",
+  "cosmo": "Terran Striga"
+ },
+ {
+  "slot": 149,
+  "vanilla": "Zerg Extractor",
+  "cosmo": "Zerg Excisant"
+ },
+ {
+  "slot": 150,
+  "vanilla": "Special Mature Chrysalis",
+  "cosmo": "Terran Luminary (Golden)"
+ },
+ {
+  "slot": 151,
+  "vanilla": "Special Cerebrate",
+  "cosmo": "Terran Siren"
+ },
+ {
+  "slot": 152,
+  "vanilla": "Special Cerebrate Daggoth",
+  "cosmo": "Zerg Othstol Oviform"
+ },
+ {
+  "slot": 153,
+  "vanilla": "Unused Zerg2",
+  "cosmo": "Zerg Tethvith Swamp"
+ },
+ {
+  "slot": 154,
+  "vanilla": "Protoss Nexus",
+  "cosmo": "Protoss Nexus"
+ },
+ {
+  "slot": 155,
+  "vanilla": "Protoss Robotics Facility",
+  "cosmo": "Protoss Lattice"
+ },
+ {
+  "slot": 156,
+  "vanilla": "Protoss Pylon",
+  "cosmo": "Protoss Pylon"
+ },
+ {
+  "slot": 157,
+  "vanilla": "Protoss Assimilator",
+  "cosmo": "Protoss Aquifer"
+ },
+ {
+  "slot": 158,
+  "vanilla": "Unused Protoss1",
+  "cosmo": "Protoss Automaton Register"
+ },
+ {
+  "slot": 159,
+  "vanilla": "Protoss Observatory",
+  "cosmo": "Protoss Prostration Stage"
+ },
+ {
+  "slot": 160,
+  "vanilla": "Protoss Gateway",
+  "cosmo": "Protoss Gateway"
+ },
+ {
+  "slot": 161,
+  "vanilla": "Unused Protoss2",
+  "cosmo": "Protoss Rogue Gallery"
+ },
+ {
+  "slot": 162,
+  "vanilla": "Protoss Photon Cannon",
+  "cosmo": "Protoss Warden"
+ },
+ {
+  "slot": 163,
+  "vanilla": "Protoss Citadel of Adun",
+  "cosmo": "Terran Fountainhead"
+ },
+ {
+  "slot": 164,
+  "vanilla": "Protoss Cybernetics Core",
+  "cosmo": "Protoss Cenotaph"
+ },
+ {
+  "slot": 165,
+  "vanilla": "Protoss Templar Archives",
+  "cosmo": "Protoss Ancestral Archives"
+ },
+ {
+  "slot": 166,
+  "vanilla": "Protoss Forge",
+  "cosmo": "Protoss Embassy"
+ },
+ {
+  "slot": 167,
+  "vanilla": "Protoss Stargate",
+  "cosmo": "Protoss Stargate"
+ },
+ {
+  "slot": 168,
+  "vanilla": "Special Stasis Cell Prison",
+  "cosmo": "Protoss Argosy"
+ },
+ {
+  "slot": 169,
+  "vanilla": "Protoss Fleet Beacon",
+  "cosmo": "Protoss Fleet Beacon"
+ },
+ {
+  "slot": 170,
+  "vanilla": "Protoss Arbiter Tribunal",
+  "cosmo": "Zerg Alkag Iteth"
+ },
+ {
+  "slot": 171,
+  "vanilla": "Protoss Robotics Support Bay",
+  "cosmo": "Protoss Synthetic Synod"
+ },
+ {
+  "slot": 172,
+  "vanilla": "Protoss Shield Battery",
+  "cosmo": "Protoss Vagrant"
+ },
+ {
+  "slot": 173,
+  "vanilla": "Special Khaydarin Crystal Form",
+  "cosmo": "Zerg Alaszileth"
+ },
+ {
+  "slot": 174,
+  "vanilla": "Special Protoss Temple",
+  "cosmo": "Terran Quarry"
+ },
+ {
+  "slot": 175,
+  "vanilla": "Special XelNaga Temple",
+  "cosmo": "Terran Tinkerer's Tower"
+ },
+ {
+  "slot": 176,
+  "vanilla": "Resource Mineral Field",
+  "cosmo": "Mineral Field (Type 1)"
+ },
+ {
+  "slot": 177,
+  "vanilla": "Resource Mineral Field Type 2",
+  "cosmo": "Mineral Field (Type 2)"
+ },
+ {
+  "slot": 178,
+  "vanilla": "Resource Mineral Field Type 3",
+  "cosmo": "Mineral Field (Type 3)"
+ },
+ {
+  "slot": 179,
+  "vanilla": "Unused Cave",
+  "cosmo": "Protoss Anthelion"
+ },
+ {
+  "slot": 180,
+  "vanilla": "Unused Cave In",
+  "cosmo": "Zerg Izirokor"
+ },
+ {
+  "slot": 181,
+  "vanilla": "Unused Cantina",
+  "cosmo": "Zerg Irulant Ivoa"
+ },
+ {
+  "slot": 182,
+  "vanilla": "Unused Mining Platform",
+  "cosmo": "Protoss Artisan"
+ },
+ {
+  "slot": 183,
+  "vanilla": "Unused Independant Command Center",
+  "cosmo": "Protoss Empress"
+ },
+ {
+  "slot": 184,
+  "vanilla": "Special Independant Starport",
+  "cosmo": "Protoss Prudence"
+ },
+ {
+  "slot": 185,
+  "vanilla": "Unused Independant Jump Gate",
+  "cosmo": "Zerg Skithrokor"
+ },
+ {
+  "slot": 186,
+  "vanilla": "Unused Ruins",
+  "cosmo": "Terran Paladin"
+ },
+ {
+  "slot": 187,
+  "vanilla": "Unused Khaydarin Crystal Formation",
+  "cosmo": "Terran Savant (Entropy Gauntlets)"
+ },
+ {
+  "slot": 188,
+  "vanilla": "Resource Vespene Geyser",
+  "cosmo": "Vespene Geyser"
+ },
+ {
+  "slot": 189,
+  "vanilla": "Special Warp Gate",
+  "cosmo": "Terran Hadron"
+ },
+ {
+  "slot": 190,
+  "vanilla": "Special Psi Disrupter",
+  "cosmo": "Terran Biotic Bastion"
+ },
+ {
+  "slot": 191,
+  "vanilla": "Unused Zerg Marker",
+  "cosmo": "Zerg Axitrilisk"
+ },
+ {
+  "slot": 192,
+  "vanilla": "Unused Terran Marker",
+  "cosmo": null
+ },
+ {
+  "slot": 193,
+  "vanilla": "Unused Protoss Marker",
+  "cosmo": "Zerg Zorkiz Shroud"
+ },
+ {
+  "slot": 194,
+  "vanilla": "Special Zerg Beacon",
+  "cosmo": "Terran Aspirant"
+ },
+ {
+  "slot": 195,
+  "vanilla": "Special Terran Beacon",
+  "cosmo": "Terran Blackjack"
+ },
+ {
+  "slot": 196,
+  "vanilla": "Special Protoss Beacon",
+  "cosmo": "Terran Claymore"
+ },
+ {
+  "slot": 197,
+  "vanilla": "Special Zerg Flag Beacon",
+  "cosmo": "Zerg Tosvrol Haunt"
+ },
+ {
+  "slot": 198,
+  "vanilla": "Special Terran Flag Beacon",
+  "cosmo": "Terran Iron Foundry"
+ },
+ {
+  "slot": 199,
+  "vanilla": "Special Protoss Flag Beacon",
+  "cosmo": "Terran Captaincy"
+ },
+ {
+  "slot": 200,
+  "vanilla": "Special Power Generator",
+  "cosmo": "Terran Scrapyard"
+ },
+ {
+  "slot": 201,
+  "vanilla": "Special Overmind Cocoon",
+  "cosmo": "Protoss Crucible"
+ },
+ {
+  "slot": 202,
+  "vanilla": "Spell Dark Swarm",
+  "cosmo": "Carapace Swarm"
+ },
+ {
+  "slot": 203,
+  "vanilla": "Special Floor Missile Trap",
+  "cosmo": "Floor Missile Trap"
+ },
+ {
+  "slot": 204,
+  "vanilla": "Special Floor Hatch",
+  "cosmo": "Zerg Kalkiir Lake"
+ },
+ {
+  "slot": 205,
+  "vanilla": "Special Upper Level Door",
+  "cosmo": "Left Upper Level Door"
+ },
+ {
+  "slot": 206,
+  "vanilla": "Special Right Upper Level Door",
+  "cosmo": "Right Upper Level Door"
+ },
+ {
+  "slot": 207,
+  "vanilla": "Special Pit Door",
+  "cosmo": "Left Pit Door"
+ },
+ {
+  "slot": 208,
+  "vanilla": "Special Right Pit Door",
+  "cosmo": "Right Pit Door"
+ },
+ {
+  "slot": 209,
+  "vanilla": "Special Floor Gun Trap",
+  "cosmo": "Floor Gun Trap"
+ },
+ {
+  "slot": 210,
+  "vanilla": "Special Wall Missile Trap",
+  "cosmo": "Wall Missile Trap (Left)"
+ },
+ {
+  "slot": 211,
+  "vanilla": "Special Wall Flame Trap",
+  "cosmo": "Wall Flame Trap (Left)"
+ },
+ {
+  "slot": 212,
+  "vanilla": "Special Right Wall Missile Trap",
+  "cosmo": "Wall Missile Trap (Right)"
+ },
+ {
+  "slot": 213,
+  "vanilla": "Special Right Wall Flame Trap",
+  "cosmo": "Wall Flame Trap (Right)"
+ },
+ {
+  "slot": 214,
+  "vanilla": "Special Start Location",
+  "cosmo": null
+ },
+ {
+  "slot": 215,
+  "vanilla": "Powerup Flag",
+  "cosmo": "Terran Treasury"
+ },
+ {
+  "slot": 216,
+  "vanilla": "Powerup Young Chrysalis",
+  "cosmo": "Zerg Larvosk Cesiant"
+ },
+ {
+  "slot": 217,
+  "vanilla": "Powerup Psi Emitter",
+  "cosmo": "Zerg Konvilisk"
+ },
+ {
+  "slot": 218,
+  "vanilla": "Powerup Data Disk",
+  "cosmo": "Zerg Akistrokor"
+ },
+ {
+  "slot": 219,
+  "vanilla": "Powerup Khaydarin Crystal",
+  "cosmo": "Zerg Geszkath Grotto"
+ },
+ {
+  "slot": 220,
+  "vanilla": "Powerup Mineral Cluster Type 1",
+  "cosmo": "Protoss Ardent Authority"
+ },
+ {
+  "slot": 221,
+  "vanilla": "Powerup Mineral Cluster Type 2",
+  "cosmo": "Vespene Ridge"
+ },
+ {
+  "slot": 222,
+  "vanilla": "Powerup Protoss Gas Orb Type 1",
+  "cosmo": "Zerg Iroleth"
+ },
+ {
+  "slot": 223,
+  "vanilla": "Powerup Protoss Gas Orb Type 2",
+  "cosmo": "Protoss Monument of Sin"
+ },
+ {
+  "slot": 224,
+  "vanilla": "Powerup Zerg Gas Sac Type 1",
+  "cosmo": "Zerg Irol Iris"
+ },
+ {
+  "slot": 225,
+  "vanilla": "Powerup Zerg Gas Sac Type 2",
+  "cosmo": "Protoss Sanctum of Sorrow"
+ },
+ {
+  "slot": 226,
+  "vanilla": "Powerup Terran Gas Tank Type 1",
+  "cosmo": "Protoss Grand Library"
+ },
+ {
+  "slot": 227,
+  "vanilla": "Powerup Terran Gas Tank Type 2",
+  "cosmo": "Zerg Sibraelosk"
+ }
+]

@@ -28,34 +28,49 @@ const FLINGY_FIELD_COUNT: usize = 7;
 /// flingy.dat field index for top speed.
 const FIELD_FLINGY_TOP_SPEED: usize = 1;
 
-/// `bw_dat` dat init done (once per process; the dat loads once at startup).
-static DAT_INIT: std::sync::Once = std::sync::Once::new();
+/// `bw_dat` dat init state: the units/flingy table addresses last (re)initialised
+/// against. 0 = never. Cosmonarchy's hotloader rebuilds the mpq (and with it the
+/// dat tables) on each game launch, so pointers resolved in a previous session
+/// dangle — bw_dat's per-field caches must be refreshed whenever the tables move.
+static LAST_UNITS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+static LAST_FLINGY: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
 
-/// Resolve the dat table pointers and initialise `bw_dat`. Safe to call repeatedly;
-/// the actual initialisation runs once.
-pub unsafe fn init() {
+/// Resolve the dat table pointers and (re)initialise `bw_dat` whenever the live
+/// tables moved since the last call. Safe and cheap to call every game tick;
+/// returns true when a (re)initialisation happened.
+pub unsafe fn init() -> bool {
     let api = crate::plus::api();
-    DAT_INIT.call_once(|| unsafe {
-        let units = resolve(api, 0);
-        let flingy = resolve(api, 2);
-        if let Some(units) = units {
-            bw_dat::init_units(units as *const _, UNITS_FIELD_COUNT);
-        }
-        if let Some(flingy) = flingy {
-            bw_dat::init_flingy(flingy as *const _, FLINGY_FIELD_COUNT);
-        }
-        let units_entries = if let Some(units) = units {
-            (*(units as *const DatTable)).entries
-        } else {
-            0
-        };
-        crate::log::log(&format!(
-            "[cosmo-plus] dat init: units_dat=0x{:x} ({} entries), flingy_dat=0x{:x}",
-            units.map(|p| p as usize).unwrap_or(0),
-            units_entries,
-            flingy.map(|p| p as usize).unwrap_or(0),
-        ));
-    });
+    let units = resolve(api, 0);
+    let flingy = resolve(api, 2);
+    let units_addr = units.map_or(0, |p| p as usize);
+    let flingy_addr = flingy.map_or(0, |p| p as usize);
+
+    let last_units = LAST_UNITS.load(std::sync::atomic::Ordering::Relaxed);
+    let last_flingy = LAST_FLINGY.load(std::sync::atomic::Ordering::Relaxed);
+    if units_addr == last_units && flingy_addr == last_flingy && last_units != 0 {
+        return false; // nothing moved; already initialised against these tables
+    }
+
+    if let Some(units) = units {
+        bw_dat::init_units(units as *const _, UNITS_FIELD_COUNT);
+    }
+    if let Some(flingy) = flingy {
+        bw_dat::init_flingy(flingy as *const _, FLINGY_FIELD_COUNT);
+    }
+    LAST_UNITS.store(units_addr, std::sync::atomic::Ordering::Relaxed);
+    LAST_FLINGY.store(flingy_addr, std::sync::atomic::Ordering::Relaxed);
+    crate::crash::record_dat_resolve(units_addr, flingy_addr);
+
+    let units_entries = if let Some(units) = units {
+        (*(units as *const DatTable)).entries
+    } else {
+        0
+    };
+    crate::log::log(&format!(
+        "[cosmo-plus] dat init: units_dat=0x{:x} ({} entries), flingy_dat=0x{:x}",
+        units_addr, units_entries, flingy_addr,
+    ));
+    true
 }
 
 /// Resolve a dat table pointer via the plugin api (`dat_type`: 0 = units, 2 = flingy).
@@ -253,4 +268,51 @@ pub fn dump_csv(names: &[String]) {
     } else {
         crate::log::log("[cosmo-plus] ERROR: could not write cosmo_plus_dump.csv");
     }
+}
+
+/// Apply the `advanced_workers` deltas to every tier-2 worker's live dat row:
+/// `+minerals_delta` ore, `+gas_delta` gas, `+build_time_delta_seconds` build
+/// time (each clamped at 0). Both the trained and the morph paths charge from
+/// these dat fields, so a negative build-time delta shortens both (Agrileth's
+/// 20s morph / 30s train become e.g. 13s / 23s). Logs `old -> new` per field;
+/// returns the number of fields written.
+pub unsafe fn apply_advanced_worker_deltas(cfg: &PlusConfig) -> u32 {
+    let Some(aw) = cfg.advanced_workers else {
+        return 0;
+    };
+    let mut applied = 0u32;
+    for &(id, tier, race) in saturation::WORKER_TIERS {
+        if tier != 2 {
+            continue;
+        }
+        let (om, og, ot) = read_cost(id);
+        let nm = (om as i32 + aw.minerals_delta).clamp(0, u16::MAX as i32) as u16;
+        let ng = (og as i32 + aw.gas_delta).clamp(0, u16::MAX as i32) as u16;
+        let nt = (ot as i32 + aw.build_time_delta_seconds * 24).clamp(0, u16::MAX as i32) as u16;
+        if nm != om as u16 {
+            if let Some(old) = write_u16_field(0, FIELD_MINERAL_COST, id, nm) {
+                crate::log::log(&format!(
+                    "[cosmo-plus] advanced worker {race} id {id}: minerals {old} -> {nm}"
+                ));
+                applied += 1;
+            }
+        }
+        if ng != og as u16 {
+            if let Some(old) = write_u16_field(0, FIELD_GAS_COST, id, ng) {
+                crate::log::log(&format!(
+                    "[cosmo-plus] advanced worker {race} id {id}: gas {old} -> {ng}"
+                ));
+                applied += 1;
+            }
+        }
+        if nt != ot as u16 {
+            if let Some(old) = write_u16_field(0, FIELD_BUILD_TIME, id, nt) {
+                crate::log::log(&format!(
+                    "[cosmo-plus] advanced worker {race} id {id}: build_time {old} -> {nt}"
+                ));
+                applied += 1;
+            }
+        }
+    }
+    applied
 }

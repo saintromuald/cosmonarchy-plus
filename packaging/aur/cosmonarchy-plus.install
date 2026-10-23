@@ -1,0 +1,16 @@
+post_install() {
+  echo '>> Cosmonarchy Plus is installed to /opt/cosmonarchy-plus.'
+  echo '>> First launch copies the game to ~/.local/share/cosmonarchy-plus and'
+  echo '>> needs an existing Cosmonarchy install to copy the base game from'
+  echo '>> (set COSMO_PLUS_STARCRAFT_SRC=/path/to/Starcraft to skip the search).'
+  echo '>> Updates: paru -Syu; they apply on the next launch.'
+}
+
+post_upgrade() {
+  echo '>> Cosmonarchy Plus upgraded. The new build applies on next launch.'
+}
+
+pre_remove() {
+  echo '>> Note: ~/.local/share/cosmonarchy-plus (your working copy and'
+  echo '>> Wine prefix) is left in place; delete it manually if unwanted.'
+}

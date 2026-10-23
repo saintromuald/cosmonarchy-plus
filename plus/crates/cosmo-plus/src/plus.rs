@@ -40,11 +40,15 @@ pub(crate) fn install() {
     let _ = CONFIG.set(cfg);
 
     crate::log::log(&format!(
-        "[cosmo-plus] feature build: v{} abi={} build={:#010x}",
+        "[cosmo-plus] feature build: v{} abi={} build={:#010x} rev={}",
         env!("CARGO_PKG_VERSION"),
         crate::cosmo_plus_abi(),
-        crate::cosmo_plus_build_id()
+        crate::cosmo_plus_build_id(),
+        env!("COSMO_PLUS_GIT_REV"),
     ));
+
+    // Crash self-capture first: vectored exception handler + panic hook.
+    unsafe { crate::crash::install() };
 
     // May be too early for the template list (built during engine init); the first game
     // tick calls this again as a fallback.
@@ -71,6 +75,7 @@ pub(crate) fn install() {
     // Idle-worker hotkey (F9 by default; see idle_workers.rs). Independent of the
     // overlay switch — it is polled from the draw hook, so it needs that hook.
     crate::idle_workers::install();
+    crate::ultraload::install();
     // Larva picker (F12 by default; see larva_pick.rs). Needs the draw hook and
     // installs its own keyboard hook for the count entry.
     crate::larva_pick::install();

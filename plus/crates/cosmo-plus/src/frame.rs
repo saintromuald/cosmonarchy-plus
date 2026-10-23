@@ -37,23 +37,36 @@ pub(crate) fn install() {
 /// The per-frame callback.
 unsafe extern "C" fn tick() {
     unsafe {
-        FIRST_TICK.call_once(|| {
-            crate::data::init();
+        // Cosmonarchy's hotloader rebuilds the mpq (and the dat tables) on each
+        // game launch, so the table pointers can move between sessions. Refresh
+        // bw_dat and re-apply the (idempotent) dat overrides whenever they do —
+        // the overrides are deterministic per config, so writing them per session
+        // yields the same result as writing them once.
+        if crate::data::init() {
             let names = crate::data::load_unit_names();
             if let Some(cfg) = crate::plus::config() {
                 let applied = crate::data::apply_overrides(cfg, &names);
                 crate::log::log(&format!("[cosmo-plus] applied {applied} dat override field(s)"));
+                let worker_applied = crate::data::apply_advanced_worker_deltas(cfg);
+                crate::log::log(&format!(
+                    "[cosmo-plus] applied {worker_applied} advanced-worker dat field(s)"
+                ));
             }
             if crate::config::env_flag("CM_PLUS_DUMP") {
                 crate::data::dump_csv(&names);
             }
+        }
+        FIRST_TICK.call_once(|| {
             crate::antimeta::debug_dump_game_types_once();
+            crate::ultraload_icon::install_once();
             if measure_enabled() {
                 measure_begin();
             }
         });
         crate::antimeta::on_game_tick();
         crate::draft::on_game_tick();
+        crate::ultraload::on_game_tick();
+        crate::crash::note_tick();
         if measure_enabled() {
             measure_tick();
         }

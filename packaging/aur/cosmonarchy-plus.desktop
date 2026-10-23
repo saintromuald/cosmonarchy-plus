@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=Cosmonarchy Plus
+GenericName=Cosmonarchy Plus (Solo)
+Comment=Play Cosmonarchy Plus - Plus gameplay, no rollback netcode
+Exec=cosmonarchy-plus solo
+Icon=cosmonarchy-plus
+Terminal=false
+Categories=Game;StrategyGame;

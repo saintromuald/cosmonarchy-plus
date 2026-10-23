@@ -34,6 +34,14 @@ impl Yaml {
         }
     }
 
+    /// Float value if this is a scalar that parses as an f64.
+    pub fn as_f64(&self) -> Option<f64> {
+        match self {
+            Yaml::Scalar(s) => s.trim().parse::<f64>().ok(),
+            _ => None,
+        }
+    }
+
     pub fn as_str(&self) -> Option<&str> {
         match self {
             Yaml::Scalar(s) => Some(s.as_str()),

@@ -22,6 +22,26 @@ use std::sync::atomic::{AtomicU16, Ordering};
 use cosmo_plus_core::hotkeys::{parse_key, DEFAULT_IDLE_WORKER_KEY};
 use cosmo_plus_core::saturation::worker_tier;
 
+/// Main orders a worker can hold while it is genuinely idle: the game parks
+/// jobless workers on `Guard` (0x02) / `PlayerGuard` (0x03).
+const ORDER_GUARD: u8 = 0x02;
+const ORDER_PLAYER_GUARD: u8 = 0x03;
+
+/// A worker is idle when it is completed, carries nothing, is not mid-harvest,
+/// and either has no harvest link or sits on a guard order (some workers, e.g.
+/// Zerg Agrileth, keep a stale harvest target while parked — the guard orders
+/// catch those too).
+fn worker_is_idle(u: &bw_dat::structs::Unit) -> bool {
+    if u.remaining_build_time != 0 {
+        return false;
+    }
+    let w = unsafe { &u.unit_specific.worker };
+    if w.carried_resource_count != 0 || w.is_harvesting != 0 {
+        return false;
+    }
+    w.current_harvest_target.is_null() || u.order == ORDER_GUARD || u.order == ORDER_PLAYER_GUARD
+}
+
 /// How many units one selection can hold (`SelectionCap`).
 const SELECTION_CAP: usize = 12;
 
@@ -49,7 +69,7 @@ pub(crate) fn install() {
 }
 
 /// The local player's id, or `None` while it is not yet resolvable.
-unsafe fn local_player() -> Option<u32> {
+pub(crate) unsafe fn local_player() -> Option<u32> {
     let api = crate::plus::api();
     let f = (api.local_player_id)()?;
     Some(f())
@@ -96,10 +116,7 @@ pub(crate) unsafe fn poll() {
         if worker_tier((*u).unit_id).is_none() {
             return;
         }
-        if (*u).remaining_build_time != 0 {
-            return;
-        }
-        if !(*u).unit_specific.worker.current_harvest_target.is_null() {
+        if !worker_is_idle(&*u) {
             return;
         }
         list[n] = u;

@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=Cosmonarchy Plus (Host)
+GenericName=Cosmonarchy Plus (Host)
+Comment=Rollback netcode match - you create the lobby
+Exec=cosmonarchy-plus host
+Icon=cosmonarchy-plus
+Terminal=false
+Categories=Game;StrategyGame;

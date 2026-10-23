@@ -76,3 +76,39 @@ building and with the next tier's build time.
 `CM_PLUS_DUMP=1` writes `cosmo_plus_dump.csv` (id, name, ore, gas, time, speed). Compare
 the published values above against the dump; if they differ, the dump wins and the `plus.yml`
 deltas are recomputed from it. The live table is the only authority for the local build.
+
+## Advanced workers (tier 2) — deltas
+
+Requested: +25 ore, +25 gas, -7s build time, 1.5x *speed* inside a base (Ultraload),
+counted as 1.5 in the saturation overlay. Implemented as runtime deltas over the **live** dat values (no
+published absolute costs needed), keyed by the tier-2 ids in `saturation::WORKER_TIERS`:
+
+| Unit | id | applies |
+|---|---|---|
+| Terran Talos / Ogun (Worker Mode) | 20 / 494 | +25/+25, -7s, x1.5 |
+| Zerg Gosvileth / Agrileth | 47 / 302 | +25/+25, -7s, x1.5 |
+| Protoss Prudence / Autocort | 184 / 495 | +25/+25, -7s, x1.5 |
+| Askosi Dyad / Constituent | 444 / 566 | +25/+25, -7s, x1.5 |
+
+- Config: `advanced_workers:` section in `plus.yml` (deltas default to the requested
+  values).
+- Ultraload: `ultraload.rs` raises `flingy.top_speed` for a tier-2 worker while it has
+  harvest duty (a harvest target or carried cargo) and is within `depot_radius_px`
+  (default 480 px = 20 tiles) of a completed town hall of its own player, restoring the
+  dat value when it leaves. Speed is the right lever: the node's single 42-frame mining
+  slot caps payloads per patch, so a saturated advanced base mines exactly what a
+  saturated basic base mines — advanced workers just saturate with fewer of them.
+- The earlier per-trip carry multiplier (scaling `carried_resource_count` after
+  `transfer_resource_to_worker`, 0x004696D0) was **removed**: it raised the per-patch
+  ceiling by 1.5x instead of making the worker faster, so saturated advanced bases
+  out-earned basic ones.
+- Icon: `ultraload_icon.rs` appends a disabled button (`IconId::UseStimpack` placeholder,
+  engine `BTNSACT_DoNothing` action) to each tier-2 worker's command card. Replace
+  `PLACEHOLDER_ICON` with the real icon when the art exists.
+- Agrileth build time: the first build is a **morph** (Droleth → Agrileth, 20s) and later
+  builds train from the hatchery (30s); both charge the dat build-time field, so the
+  delta shortens both (13s morph / 23s train).
+- Idle-worker hotkey: the idle predicate now also accepts workers parked on
+  `Guard`/`PlayerGuard` orders (Agrileth keeps a stale harvest target while parked).
+- Overlay label: `t1+t2x1.5=eff/optimal` above gas nodes and the town hall — the
+  advanced worker weighs 1.5 in the count, and the math is written out.

@@ -51,6 +51,61 @@ pub const WORKER_TIERS: &[(u16, u8, &str)] = &[
     (566, 2, "Askosi"), // Askosi Constituent
 ];
 
+/// How much one advanced (tier-2) worker counts towards the effective worker
+/// count. Ultraload gives it 1.5x the tier-1 move speed while it works a node in
+/// range of its base, so below saturation it does 1.5 workers' worth of trips.
+/// At saturation the node's single 42-frame mining slot is the ceiling and every
+/// extra worker idles, so a saturated advanced base mines exactly what a
+/// saturated basic base mines — the advantage is needing fewer workers, not a
+/// higher ceiling.
+pub const ADVANCED_WORKER_WEIGHT: f64 = 1.5;
+
+/// The effective worker count for a node/depot with `tier1` basic and `tier2`
+/// advanced workers: `tier1 + tier2 * ADVANCED_WORKER_WEIGHT`.
+pub fn weighted_count(tier1: u32, tier2: u32) -> f64 {
+    tier1 as f64 + tier2 as f64 * ADVANCED_WORKER_WEIGHT
+}
+
+/// The tier-1 (basic) worker id of the same race as a tier-2 worker id.
+/// Ultraload is defined as "1.5x the tier-1 worker speed", so this is the
+/// reference value even if the advanced worker's own dat speed differs.
+pub fn tier1_worker_of(tier2_id: u16) -> Option<u16> {
+    let race = WORKER_TIERS
+        .iter()
+        .find(|&&(id, _, _)| id == tier2_id)
+        .map(|&(_, _, race)| race)?;
+    WORKER_TIERS
+        .iter()
+        .find(|&&(id, tier, r)| id != tier2_id && tier == 1 && r == race)
+        .map(|&(id, _, _)| id)
+}
+
+/// Whether `tier1` basic + `tier2` advanced workers saturate an `optimal` of
+/// `n` workers (effective count >= optimal).
+pub fn is_saturated(tier1: u32, tier2: u32, optimal: u32) -> bool {
+    weighted_count(tier1, tier2) >= optimal as f64
+}
+
+/// The overlay label showing the math: `2+3x1.5=6.5/4` (basic + advanced ×
+/// weight = effective / optimal). The effective count is `x.0` or `x.5`, so the
+/// fraction is written without trailing zeroes.
+pub fn format_weighted(tier1: u32, tier2: u32, optimal: u32) -> String {
+    let eff = weighted_count(tier1, tier2);
+    let eff_str = if (eff - eff.floor()).abs() < 0.01 {
+        format!("{:.0}", eff)
+    } else {
+        format!("{:.1}", eff)
+    };
+    format!(
+        "{tier1}+{tier2}x{weight}={eff_str}/{optimal}",
+        weight = if ADVANCED_WORKER_WEIGHT.fract() == 0.0 {
+            format!("{:.0}", ADVANCED_WORKER_WEIGHT)
+        } else {
+            format!("{}", ADVANCED_WORKER_WEIGHT)
+        }
+    )
+}
+
 /// Mineral-field unit ids (a.k.a. `ResourceMineralField{,_Type2,_Type3}`).
 pub const MINERAL_FIELD_IDS: &[u16] = &[176, 177, 178];
 /// Neutral gas node ids (`ResourceVespeneGeyser`, `ResourceVespeneRidge`).
@@ -221,6 +276,23 @@ mod tests {
     }
 
     #[test]
+    fn tier1_reference_for_each_tier2() {
+        for &(id, tier, race) in WORKER_TIERS {
+            if tier != 2 {
+                continue;
+            }
+            let t1 = tier1_worker_of(id).expect("every tier-2 worker has a tier-1 peer");
+            let entry = WORKER_TIERS
+                .iter()
+                .find(|&&(i, _, _)| i == t1)
+                .expect("tier-1 id is in the table");
+            assert_eq!(entry.1, 1, "id {t1} must be tier 1");
+            assert_eq!(entry.2, race, "id {t1} must be the same race as {id}");
+            assert_eq!(tier1_worker_of(t1), None, "tier-1 has no tier-1 reference");
+        }
+    }
+
+    #[test]
     fn worker_tier_table() {
         assert_eq!(worker_tier(7), Some(1));    // Mason
         assert_eq!(worker_tier(20), Some(2));   // Talos
@@ -272,6 +344,18 @@ mod tests {
         assert!(is_resource_node(188));
         assert!(is_resource_node(419));
         assert!(!is_resource_node(7)); // Mason is a worker, not a node
+    }
+
+    #[test]
+    fn weighted_count_and_label() {
+        assert_eq!(weighted_count(2, 0), 2.0);
+        assert_eq!(weighted_count(0, 2), 3.0);
+        assert_eq!(weighted_count(1, 1), 2.5);
+        assert!(!is_saturated(1, 1, 3));  // 2.5 < 3
+        assert!(is_saturated(2, 2, 5));   // 2 + 3 = 5 >= 5
+        assert_eq!(format_weighted(2, 0, 3), "2+0x1.5=2/3");
+        assert_eq!(format_weighted(2, 3, 4), "2+3x1.5=6.5/4");
+        assert_eq!(format_weighted(0, 2, 3), "0+2x1.5=3/3");
     }
 
     #[test]

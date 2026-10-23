@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=Cosmonarchy Plus (Guest)
+GenericName=Cosmonarchy Plus (Guest)
+Comment=Rollback netcode match - you join the lobby
+Exec=cosmonarchy-plus guest
+Icon=cosmonarchy-plus
+Terminal=false
+Categories=Game;StrategyGame;

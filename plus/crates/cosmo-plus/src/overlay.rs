@@ -90,7 +90,8 @@ struct DepotState {
     y: i32,
     owner: u8,
     race: u8,
-    assigned: u32,
+    tier1: u32,
+    tier2: u32,
     optimal: u32,
     color: u8,
 }
@@ -282,6 +283,9 @@ unsafe fn draw_pass() {
     for d in &cache.depots {
         draw_depot(d, &mut buf);
     }
+    // Nydus numbering: canal/exit pairs, in-world and on the minimap.
+    crate::nydus::draw_world(&mut buf);
+    crate::nydus::draw_minimap(&mut buf);
     set_font_handle(core::ptr::null_mut());
 }
 
@@ -362,8 +366,7 @@ unsafe fn recompute(cache: &mut Cache, frame: u32) {
         if cap != usize::MAX {
             optimal = optimal.min(cap as u32);
         }
-        let assigned = tier1 + tier2;
-        let saturated = assigned >= optimal;
+        let saturated = saturation::is_saturated(tier1, tier2, optimal);
         let race = player_race(owner);
         let color = if saturated {
             saturation::race_textcolor(race)
@@ -393,7 +396,8 @@ unsafe fn recompute(cache: &mut Cache, frame: u32) {
         if sprite.is_null() || (*sprite).visibility_mask == 0 {
             continue; // depot itself is fogged; nothing to show
         }
-        let mut assigned = 0u32;
+        let mut tier1 = 0u32;
+        let mut tier2 = 0u32;
         let mut optimal = 0u32;
         for n in &cache.nodes {
             if n.is_gas || n.owner != player {
@@ -402,14 +406,15 @@ unsafe fn recompute(cache: &mut Cache, frame: u32) {
             let ddx = (n.x - dx) as i64;
             let ddy = (n.y - dy) as i64;
             if ddx * ddx + ddy * ddy <= SERVICE_RADIUS_PX * SERVICE_RADIUS_PX {
-                assigned += n.tier1 + n.tier2;
+                tier1 += n.tier1;
+                tier2 += n.tier2;
                 optimal += n.optimal;
             }
         }
         if optimal == 0 {
             continue; // no visible mineral line near this depot
         }
-        let saturated = assigned >= optimal;
+        let saturated = saturation::is_saturated(tier1, tier2, optimal);
         let race = player_race(player);
         let color = if saturated {
             saturation::race_textcolor(race)
@@ -421,7 +426,8 @@ unsafe fn recompute(cache: &mut Cache, frame: u32) {
             y: dy,
             owner: player,
             race,
-            assigned,
+            tier1,
+            tier2,
             optimal,
             color,
         });
@@ -443,29 +449,31 @@ unsafe fn log_nodes(frame: u32, nodes: &[NodeState], (cam_x, cam_y): (i32, i32))
         return;
     }
     let mut msg = format!(
-        "[cosmo-plus] overlay frame {frame}: {} node(s) camera=({cam_x},{cam_y}) [x,y t1+t2=assigned/optimal dist owner race colour saturated]",
+        "[cosmo-plus] overlay frame {frame}: {} node(s) camera=({cam_x},{cam_y}) [x,y t1+t2=eff/optimal dist owner race colour saturated]",
         nodes.len()
     );
     for n in nodes {
         msg.push_str(&format!(
-            " | ({},{}) {}+{}={}/{} dist={} owner={} race={} col={:02x} sat={}",
+            " | ({},{}) {}+{}={:.1}/{} dist={} owner={} race={} col={:02x} sat={}",
             n.x,
             n.y,
             n.tier1,
             n.tier2,
-            n.tier1 + n.tier2,
+            saturation::weighted_count(n.tier1, n.tier2),
             n.optimal,
             n.dist,
             n.owner,
             n.race,
             n.color,
-            n.tier1 + n.tier2 >= n.optimal,
+            saturation::is_saturated(n.tier1, n.tier2, n.optimal),
         ));
     }
     crate::log::log(&msg);
 }
 
-/// Draw the two rows above one node (world -> screen transform: `world - camera`).
+/// Draw the weighted-count row above one node (world -> screen transform:
+/// `world - camera`). Format: `t1+t2x1.5=eff/opt` — the advanced worker's 1.5x
+/// mining weight is written out so the math is visible.
 unsafe fn draw_node(n: &NodeState, buf: &mut [u8; 16]) {
     let (cx, cy) = camera();
     let sx = n.x - cx;
@@ -474,16 +482,14 @@ unsafe fn draw_node(n: &NodeState, buf: &mut [u8; 16]) {
     get_color_handle(n.color);
 
     buf.fill(0);
-    let _ = write!(&mut buf[..], "1 {}/{}", n.tier1, n.optimal);
+    let label = saturation::format_weighted(n.tier1, n.tier2, n.optimal);
+    let _ = write!(&mut buf[..], "{label}");
     bw_print_xy(buf.as_ptr(), sx - 10, sy - 28);
-
-    buf.fill(0);
-    let _ = write!(&mut buf[..], "2 {}/{}", n.tier2, n.optimal);
-    bw_print_xy(buf.as_ptr(), sx - 10, sy - 14);
 }
 
-/// Draw the SC2-style mineral count above one town hall: `assigned/optimal`, white while
-/// under-saturated, the owner's race colour once saturated.
+/// Draw the SC2-style mineral count above one town hall:
+/// `t1+t2x1.5=eff/opt`, white while under-saturated, the owner's race colour
+/// once the weighted count saturates.
 unsafe fn draw_depot(d: &DepotState, buf: &mut [u8; 16]) {
     let (cx, cy) = camera();
     let sx = d.x - cx;
@@ -492,7 +498,8 @@ unsafe fn draw_depot(d: &DepotState, buf: &mut [u8; 16]) {
     get_color_handle(d.color);
 
     buf.fill(0);
-    let _ = write!(&mut buf[..], "{}/{}", d.assigned, d.optimal);
+    let label = saturation::format_weighted(d.tier1, d.tier2, d.optimal);
+    let _ = write!(&mut buf[..], "{label}");
     bw_print_xy(buf.as_ptr(), sx - 8, sy - 40);
 }
 
@@ -526,7 +533,7 @@ fn padded(s: &str) -> Vec<u8> {
 
 /// `helper::bw_print_xy` — eax = text, esi = x, [esp] = y (callee cleans the arg).
 #[inline(never)]
-unsafe fn bw_print_xy(text: *const u8, x: i32, y: i32) {
+pub(crate) unsafe fn bw_print_xy(text: *const u8, x: i32, y: i32) {
     core::arch::asm!(
         "pushad",
         "mov esi, ebx",
@@ -543,7 +550,7 @@ unsafe fn bw_print_xy(text: *const u8, x: i32, y: i32) {
 
 /// `helper::get_color_handle(TextColor)` — al = colour id.
 #[inline(never)]
-unsafe fn get_color_handle(color: u8) {
+pub(crate) unsafe fn get_color_handle(color: u8) {
     core::arch::asm!(
         "pushad",
         "call edx",
@@ -580,7 +587,7 @@ unsafe fn in_game_font() -> *mut u32 {
 
 /// The current camera position in world px. `g_screen_x` is `(s32*)0x00628448` (a constant
 /// pointer), so the value lives **directly at** the address — one deref, not two.
-unsafe fn camera() -> (i32, i32) {
+pub(crate) unsafe fn camera() -> (i32, i32) {
     let x = std::ptr::read(G_SCREEN_X_PTR as *const i32);
     let y = std::ptr::read(G_SCREEN_Y_PTR as *const i32);
     (x, y)

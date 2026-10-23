@@ -1,6 +1,7 @@
 # build output
 plus/target/
 dist/
+!dist/
 # ...but the installer/updater sources under dist/ ship in releases
 !dist/windows/
 !dist/macos/

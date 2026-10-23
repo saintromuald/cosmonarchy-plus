@@ -174,7 +174,7 @@ jobs:
       - name: Download pinned game build
         env:
           BUILD_SHA: ${{ steps.meta.outputs.build_sha }}
-        run: curl -fL --retry 3 -o /tmp/game.tar.gz \
+        run: wget -q -O /tmp/game.tar.gz \
           "https://codeload.github.com/${BUILD_REPO}/tar.gz/${BUILD_SHA}"
 
       - uses: actions/download-artifact@v4

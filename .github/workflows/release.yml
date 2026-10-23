@@ -174,8 +174,12 @@ jobs:
       - name: Download pinned game build
         env:
           BUILD_SHA: ${{ steps.meta.outputs.build_sha }}
-        run: wget -q -O /tmp/game.tar.gz \
-          "https://codeload.github.com/${BUILD_REPO}/tar.gz/${BUILD_SHA}"
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          echo "downloading ${BUILD_SHA} from ${BUILD_REPO}"
+          gh api "repos/${BUILD_REPO}/tarball/${BUILD_SHA}" > /tmp/game.tar.gz
+          ls -la /tmp/game.tar.gz
 
       - uses: actions/download-artifact@v4
 

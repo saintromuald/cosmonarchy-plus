@@ -4,6 +4,10 @@
 /// mod's hotkey layer (F1–F8 are camera screens, F10 the menu, F11 the HUD toggle).
 pub const DEFAULT_IDLE_WORKER_KEY: &str = "F9";
 
+/// Default larva-pick hotkey: F12 (VK 0x7B) — free in the game and the mod (F9 is
+/// now the idle-worker key, F10 the menu, F11 the HUD toggle).
+pub const DEFAULT_LARVA_KEY: &str = "F12";
+
 /// Parse a hotkey name into a virtual-key code.
 ///
 /// Accepts `F1`–`F12`, single letters/digits, `SPACE`/`TAB`/`HOME`/`END`/`DELETE`/

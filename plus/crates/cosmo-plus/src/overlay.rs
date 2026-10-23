@@ -233,6 +233,9 @@ unsafe extern "stdcall" fn draw_hook(surface: *mut core::ffi::c_void, bounds: *m
     // Idle-worker hotkey (also independent of the saturation switch; needs the draw
     // hook, which is installed regardless).
     crate::idle_workers::poll();
+    // Larva picker: fires the selection on a confirmed count, then draws its entry UI.
+    crate::larva_pick::poll();
+    crate::larva_pick::draw();
     draw_pass();
 }
 

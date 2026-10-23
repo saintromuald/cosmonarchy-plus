@@ -1,0 +1,183 @@
+#!/usr/bin/env python3
+"""cosmo-tempmpq-check - verify that Cosmonarchy's temp.mpq is complete.
+
+The game's hotloader (MPQDraft) rebuilds temp.mpq (~950 MB) at startup whenever
+the extracted data tree changed. If the game is killed or crashes during that
+rebuild, the archive is left truncated. The game then boots only partway and
+fails when it needs a missing file - "Starcraft was unable to open a required
+file ... Bad length" when the map starts (unit icons are typically the first
+casualty).
+
+This script detects a truncated archive exactly:
+
+  - the MPQ header/tables parse,
+  - every hash entry points inside the file (no data past EOF),
+  - every file of the extracted data tree (<build>/mpq/) resolves to an entry
+    with a sane size. A complete rebuild packs the whole tree; a truncated one
+    is missing whatever had not been written yet when the game was killed.
+
+Exit codes: 0 = complete, 1 = incomplete/corrupt, 2 = unreadable/not an MPQ.
+
+Usage: cosmo-tempmpq-check <temp.mpq> <mpq-tree-dir>
+
+Self-contained (Storm MPQ v0 crypto only, no external libraries). Same logic
+as tools/mapconvert/ums/mpq.py, trimmed to read-only verification and without
+reading the archive's file data (header + tables only).
+"""
+
+import os
+import struct
+import sys
+
+CRYPT = None
+
+
+def init():
+    global CRYPT
+    if CRYPT is not None:
+        return
+    t = [0] * 0x500
+    seed = 0x00100001
+    for i1 in range(0x100):
+        i2 = i1
+        for _ in range(5):
+            seed = (seed * 125 + 3) % 0x2AAAAB
+            t1 = (seed & 0xFFFF) << 16
+            seed = (seed * 125 + 3) % 0x2AAAAB
+            t[i2] = t1 | (seed & 0xFFFF)
+            i2 += 0x100
+    CRYPT = t
+
+
+def hash_string(s, typ):
+    init()
+    seed1, seed2 = 0x7FED7FED, 0xEEEEEEEE
+    for c in s.upper().encode("latin1"):
+        seed1 = (CRYPT[typ * 0x100 + c] ^ ((seed1 + seed2) & 0xFFFFFFFF)) & 0xFFFFFFFF
+        seed2 = (c + seed2 + ((seed2 << 5) & 0xFFFFFFFF) + seed1 + 3) & 0xFFFFFFFF
+    return seed1 & 0xFFFFFFFF
+
+
+class Cipher:
+    def __init__(self, key):
+        self.key = key & 0xFFFFFFFF
+        self.seed = 0xEEEEEEEE
+
+    def _advance(self, plain):
+        old = self.key
+        left = ((~old & 0xFFFFFFFF) << 0x15) & 0xFFFFFFFF
+        left = (left + 0x11111111) & 0xFFFFFFFF
+        self.key = (left | (old >> 0x0B)) & 0xFFFFFFFF
+        self.seed = (plain + self.seed + ((self.seed << 5) & 0xFFFFFFFF) + 3) & 0xFFFFFFFF
+
+    def decrypt(self, ciph):
+        c = ciph & 0xFFFFFFFF
+        self.seed = (self.seed + CRYPT[0x400 + (self.key & 0xFF)]) & 0xFFFFFFFF
+        p = c ^ ((self.key + self.seed) & 0xFFFFFFFF)
+        self._advance(p)
+        return p
+
+
+FLAG_DELETED = 0x02000000
+FLAG_EXISTS = 0x80000000
+
+
+def check(mpq_path, tree_dir):
+    try:
+        total = os.path.getsize(mpq_path)
+    except OSError as e:
+        print(f"{mpq_path}: unreadable: {e}")
+        return 2
+
+    try:
+        with open(mpq_path, "rb") as f:
+            header = f.read(32)
+            if len(header) < 32:
+                print(f"{mpq_path}: too small to be an MPQ ({total} bytes)")
+                return 1
+            magic, _, _, fmt, _, ht_off, bt_off, hc, bc = struct.unpack("<4sIIHHIIII", header)
+            if magic != b"MPQ\x1a":
+                print(f"{mpq_path}: not a Storm MPQ (magic {magic!r})")
+                return 2
+            if fmt != 0:
+                print(f"{mpq_path}: unsupported MPQ format {fmt}")
+                return 2
+            if ht_off + hc * 16 > total or bt_off + bc * 16 > total:
+                print(f"{mpq_path}: tables lie beyond EOF (truncated archive)")
+                return 1
+            f.seek(ht_off)
+            ht_raw = f.read(hc * 16)
+            f.seek(bt_off)
+            bt_raw = f.read(bc * 16)
+    except OSError as e:
+        print(f"{mpq_path}: read error: {e}")
+        return 2
+
+    # Decrypt hash table. Entry layout: hashA, hashB, locale/platform, block idx.
+    dec = Cipher(hash_string("(hash table)", 3))
+    files = {}
+    bad_blk = 0
+    for i in range(hc):
+        hA, hB, _loc, blk = struct.unpack_from("<IIII", ht_raw, i * 16)
+        hA, hB, _loc, blk = dec.decrypt(hA), dec.decrypt(hB), dec.decrypt(_loc), dec.decrypt(blk)
+        if hA == 0xFFFFFFFF:  # empty slot
+            continue
+        if blk >= bc:
+            bad_blk += 1
+            continue
+        files[(hA, hB)] = blk
+    if bad_blk:
+        print(f"{mpq_path}: {bad_blk} hash entries point outside the block table")
+        return 1
+
+    # Decrypt block table and bounds-check every live block.
+    bdec = Cipher(hash_string("(block table)", 3))
+    blocks = []
+    for i in range(bc):
+        off, size, fsize, flags = struct.unpack_from("<IIII", bt_raw, i * 16)
+        off, size, fsize, flags = bdec.decrypt(off), bdec.decrypt(size), bdec.decrypt(fsize), bdec.decrypt(flags)
+        blocks.append((off, size, fsize, flags))
+
+    overrun = 0
+    for off, size, fsize, flags in blocks:
+        if flags & FLAG_DELETED or not flags & FLAG_EXISTS:
+            continue
+        if off + size > total:
+            overrun += 1
+    if overrun:
+        print(f"{mpq_path}: {overrun} file blocks run past EOF (truncated archive)")
+        return 1
+
+    # Completeness: every file of the extracted data tree must be packed.
+    if not os.path.isdir(tree_dir):
+        print(f"{mpq_path}: no data tree at {tree_dir}; skipping the completeness check")
+        return 0
+    missing = []
+    tree_files = 0
+    for root, _, names in os.walk(tree_dir):
+        for name in names:
+            rel = os.path.relpath(os.path.join(root, name), tree_dir).replace(os.sep, "\\")
+            tree_files += 1
+            h = (hash_string(rel, 1), hash_string(rel, 2))
+            blk = files.get(h)
+            if blk is None:
+                missing.append(rel)
+                continue
+            _, _, fsize, flags = blocks[blk]
+            if not flags & FLAG_EXISTS or fsize <= 0:
+                missing.append(rel + " (empty/bad record)")
+    if missing:
+        shown = ", ".join(missing[:8])
+        more = "" if len(missing) <= 8 else f" (+{len(missing) - 8} more)"
+        print(f"{mpq_path}: incomplete archive - {len(missing)}/{tree_files} tree files missing: {shown}{more}")
+        return 1
+
+    print(f"{mpq_path}: complete ({len(files)} files, {tree_files}/{tree_files} tree files packed, {total} bytes)")
+    return 0
+
+
+if __name__ == "__main__":
+    if len(sys.argv) != 3:
+        print(__doc__.strip())
+        sys.exit(2)
+    sys.exit(check(sys.argv[1], sys.argv[2]))

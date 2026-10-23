@@ -25,6 +25,62 @@ pub struct GasTierDelta {
     pub build_time_seconds: i32,
 }
 
+/// Advanced-worker (tier-2) tuning, applied at runtime to the live dat.
+///
+/// Cost/build-time deltas only. The old per-trip mining multiplier was removed:
+/// it raised the per-patch income ceiling instead of making the worker faster,
+/// which broke the invariant "a saturated tier-2 base mines the same as a
+/// saturated tier-1 base". See [`UltraloadConfig`].
+#[derive(Debug, Clone, Copy)]
+pub struct AdvancedWorkersConfig {
+    /// Added to the unit's current mineral cost (frames; clamped at 0).
+    pub minerals_delta: i32,
+    /// Added to the unit's current gas cost (clamped at 0).
+    pub gas_delta: i32,
+    /// Added to the build time in seconds (negative shortens; clamped at 0).
+    pub build_time_delta_seconds: i32,
+}
+
+impl Default for AdvancedWorkersConfig {
+    fn default() -> Self {
+        AdvancedWorkersConfig {
+            minerals_delta: 25,
+            gas_delta: 25,
+            build_time_delta_seconds: -7,
+        }
+    }
+}
+
+/// Ultraload: the tier-2 worker passive.
+///
+/// A tier-2 (advanced) worker that is working a resource node inside a base —
+/// i.e. within `depot_radius_px` of a completed town hall of its own player —
+/// moves at `speed_multiplier` times the tier-1 worker speed. The worker's
+/// `flingy.top_speed` is raised while the condition holds and restored when it
+/// does not, so the node's 42-frame mining slot stays the only throughput
+/// ceiling: a saturated tier-2 base mines exactly what a saturated tier-1 base
+/// mines, it just needs fewer workers to keep every patch busy.
+#[derive(Debug, Clone, Copy)]
+pub struct UltraloadConfig {
+    /// Master switch. Defaults to on.
+    pub enabled: bool,
+    /// Speed multiplier applied while the passive is active (1.0 = off).
+    pub speed_multiplier: f32,
+    /// Radius around a completed town hall in which the passive is active,
+    /// in pixels (24 px per tile).
+    pub depot_radius_px: i32,
+}
+
+impl Default for UltraloadConfig {
+    fn default() -> Self {
+        UltraloadConfig {
+            enabled: true,
+            speed_multiplier: 1.5,
+            depot_radius_px: 480,
+        }
+    }
+}
+
 /// Saturation display tuning (consumed by the overlay task; parsed and stored
 /// now so `plus.yml` is the single source of truth).
 #[derive(Debug, Clone)]
@@ -54,6 +110,11 @@ pub struct PlusConfig {
     pub overrides: Vec<Override>,
     pub gas_tier_deltas: BTreeMap<u32, GasTierDelta>,
     pub saturation: SaturationConfig,
+    /// Advanced-worker tuning (`advanced_workers:` section). `None` = not
+    /// configured (no deltas).
+    pub advanced_workers: Option<AdvancedWorkersConfig>,
+    /// Ultraload passive for tier-2 workers (`ultraload:` section).
+    pub ultraload: UltraloadConfig,
     /// Optional gameplay mode (e.g. `antimeta`). `None` = no mode (default off).
     /// The `CM_PLUS_MODE` environment variable, when set, takes precedence over this.
     pub mode: Option<String>,
@@ -111,6 +172,50 @@ pub fn parse_plus_yml(text: &str) -> Result<PlusConfig, String> {
                 d.build_time_seconds = t as i32;
             }
             cfg.gas_tier_deltas.insert(tier, d);
+        }
+    }
+
+    // Advanced-worker tuning: all keys optional, defaulting to the requested
+    // values (+25/+25 ore/gas, -7s build time).
+    if let Some(aw) = root.get("advanced_workers") {
+        let Yaml::Map(entries) = aw else {
+            return Err("`advanced_workers:` must be a map".to_string());
+        };
+        let get = |k: &str| entries.iter().find(|(kk, _)| kk == k).map(|(_, v)| v);
+        let mut c = AdvancedWorkersConfig::default();
+        if let Some(v) = get("minerals_delta").and_then(Yaml::as_i64) {
+            c.minerals_delta = v as i32;
+        }
+        if let Some(v) = get("gas_delta").and_then(Yaml::as_i64) {
+            c.gas_delta = v as i32;
+        }
+        if let Some(v) = get("build_time_delta_seconds").and_then(Yaml::as_i64) {
+            c.build_time_delta_seconds = v as i32;
+        }
+        cfg.advanced_workers = Some(c);
+    }
+
+    // Ultraload: the tier-2 worker passive (conditional 1.5x speed in base).
+    if let Some(ul) = root.get("ultraload") {
+        let Yaml::Map(entries) = ul else {
+            return Err("`ultraload:` must be a map".to_string());
+        };
+        let get = |k: &str| entries.iter().find(|(kk, _)| kk == k).map(|(_, v)| v);
+        if let Some(s) = get("enabled").and_then(Yaml::as_str) {
+            cfg.ultraload.enabled = parse_bool(s);
+        }
+        if let Some(v) = get("speed_multiplier").and_then(Yaml::as_f64) {
+            let v = v as f32;
+            if !(1.0..=4.0).contains(&v) {
+                return Err("`ultraload.speed_multiplier:` must be within 1.0..=4.0".to_string());
+            }
+            cfg.ultraload.speed_multiplier = v;
+        }
+        if let Some(v) = get("depot_radius_px").and_then(Yaml::as_i64) {
+            if !(0..=2000).contains(&v) {
+                return Err("`ultraload.depot_radius_px:` must be within 0..=2000".to_string());
+            }
+            cfg.ultraload.depot_radius_px = v as i32;
         }
     }
 
@@ -517,5 +622,31 @@ draft:
         ];
         assert!(validate_draft_pools(&full, &[(0, 1)], 20).is_empty());
         assert_eq!(OPTION_COUNT, 4);
+    }
+
+    #[test]
+    fn ultraload_defaults_to_on_at_one_and_a_half() {
+        let cfg = parse_plus_yml("saturation:\n  tier1_default: 8\n").unwrap();
+        assert!(cfg.ultraload.enabled);
+        assert!((cfg.ultraload.speed_multiplier - 1.5).abs() < f32::EPSILON);
+        assert_eq!(cfg.ultraload.depot_radius_px, 480);
+    }
+
+    #[test]
+    fn ultraload_parses_and_validates() {
+        let cfg = parse_plus_yml(
+            "ultraload:\n  enabled: false\n  speed_multiplier: 2.0\n  depot_radius_px: 300\n",
+        )
+        .unwrap();
+        assert!(!cfg.ultraload.enabled);
+        assert!((cfg.ultraload.speed_multiplier - 2.0).abs() < f32::EPSILON);
+        assert_eq!(cfg.ultraload.depot_radius_px, 300);
+
+        assert!(parse_plus_yml("ultraload:\n  speed_multiplier: 9.0\n").is_err());
+        assert!(parse_plus_yml("ultraload:\n  depot_radius_px: -5\n").is_err());
+
+        // The old payload multiplier is gone from the schema; it is ignored, not parsed.
+        let cfg = parse_plus_yml("advanced_workers:\n  mining_multiplier: 1.5\n").unwrap();
+        assert!(cfg.advanced_workers.is_some());
     }
 }

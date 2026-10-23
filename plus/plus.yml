@@ -69,3 +69,27 @@ saturation:
   # under: grey
   # optimal: green
   # over: amber
+
+# Advanced (tier-2) worker tuning, applied at runtime to the live dat.
+# All keys optional; the defaults are the requested values.
+#   minerals_delta            added to the worker's current mineral cost
+#   gas_delta                 added to the worker's current gas cost
+#   build_time_delta_seconds  added to the build time in seconds (negative = faster)
+# Agrileth note: its first build is a 20s morph (Droleth -> Agrileth) and every later
+# one a 30s train; both paths charge the dat build time, so -7s makes them 13s / 23s.
+advanced_workers:
+  minerals_delta: 25
+  gas_delta: 25
+  build_time_delta_seconds: -7
+
+# Ultraload — tier-2 worker passive.
+#
+# A tier-2 (advanced) worker working a node inside one of its own bases — within
+# `depot_radius_px` of a completed town hall — moves at `speed_multiplier` times
+# the tier-1 worker speed. Speed, not payload: the node's single 42-frame mining
+# slot stays the throughput ceiling, so a saturated advanced base mines exactly
+# what a saturated basic base mines; advanced workers just need fewer of them.
+ultraload:
+  enabled: true
+  speed_multiplier: 1.5
+  depot_radius_px: 480

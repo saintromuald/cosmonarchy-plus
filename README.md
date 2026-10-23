@@ -54,6 +54,20 @@ tools/build.sh                 # cargo xwin, i686-pc-windows-msvc
 tools/install-plus.sh Release  # copies to plugins/zz-cosmo-plus.qdp
 ```
 
+## Distribution
+
+Players never touch git, plugins, or folders. CI cuts one release per version
+(see `docs/RELEASING.md`); each platform has a one-click installer that also
+updates, and none of them touch an existing Cosmonarchy install:
+
+- **Windows** — `CosmonarchyPlus-Setup-<v>.zip` (source: `dist/windows/`)
+- **macOS** — `CosmonarchyPlus-Mac-Setup-<v>.zip` (source: `dist/macos/`)
+- **Arch** — `cosmonarchy-plus-bin` on the AUR (source: `packaging/aur/`)
+
+The Wine work needed to run the game (Windows 10 mode, `ddraw=native,builtin`
+so cnc-ddraw loads, cnc-ddraw next to the exe) is applied automatically by
+`packaging/common/provision-prefix.sh` on both Linux and macOS.
+
 ## Status
 
 See `docs/PLAN.md` for the phased plan, the feasibility matrix, and what is still

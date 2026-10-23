@@ -1,6 +1,9 @@
 # build output
 plus/target/
 dist/
+# ...but the installer/updater sources under dist/ ship in releases
+!dist/windows/
+!dist/macos/
 *.log
 *.dmp
 

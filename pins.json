@@ -1,0 +1,6 @@
+{
+  "build_repo": "saintromuald/cosmonarchy-bw-release",
+  "build_ref": "plus",
+  "crownlink_repo": "saintromuald/CrownLink",
+  "crownlink_ref": "master"
+}

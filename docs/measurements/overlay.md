@@ -7,12 +7,11 @@ and the evidence that it works.
 ## What is drawn
 
 For every resource node (mineral field `176/177/178`, gas extractor `419/420/421/457`,
-`110/157/149/539`, `365/364` — and the neutral geysers `188/221`), two rows of text appear
-above the patch:
+`110/157/149/539`, `365/364` — and the neutral geysers `188/221`), one weighted row
+appears above the patch:
 
 ```
-<tier-1 assigned>/<optimal>
-<tier-2 assigned>/<optimal>
+<tier-1>+<tier-2>x1.5=<effective>/<optimal>
 ```
 
 * `assigned` = the number of **completed** workers whose harvest link
@@ -21,16 +20,19 @@ above the patch:
   Scribe/Pilgrim (tier 1); advanced = Ogun/Autocort/Talos/Gosvileth/Agrileth/Prudence/Dyad/
   Constituent (tier 2). Workers still under construction (`remaining_build_time != 0`) are
   excluded.
+* `effective` = `tier1 + 1.5 × tier2` — an advanced worker mines at 1.5x, so it weighs 1.5
+  in the count (`saturation::weighted_count` / `format_weighted`). The label writes the
+  math out (`2+3x1.5=6.5/4`) for both minerals (town-hall row) and gas (per-node rows).
 * `optimal` = the measured model `n* = ceil(1 + (2·D/v + δ)/42)` with `v = 5.0 px/frame`
   (the functional worker top speed `1280/256`) and `D` the straight-line distance from the
   node to the nearest completed drop-off (town hall / resource depot —
   `saturation::DEPOT_IDS = 106/215/131/154/429`).
 
 Because every *functional* worker shares `top_speed = 1280`, `n*` does **not** depend on
-tier: the two rows show the same optimum, and the split is the truth of the measurement
-(≈ 3 for a typical mineral line at 200 px), not the `0/8` vs `0/4` placeholders. The six
-placeholder tier-2 slots (`top_speed = 1`) are immobile and are flagged in `cosmo_plus.log`
-(not on screen).
+tier: the optimum is a distance-only number (≈ 3 for a typical mineral line at 200 px),
+and saturation is judged on the **weighted** count (`effective >= optimal`), not the raw
+tier split. The six placeholder tier-2 slots (`top_speed = 1`) are immobile and are
+flagged in `cosmo_plus.log` (not on screen).
 
 ## Colour
 

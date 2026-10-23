@@ -1,0 +1,265 @@
+name: release
+
+# Assemble and publish a Cosmonarchy Plus release.
+#
+# One release = one version = five assets + a manifest:
+#   CosmonarchyPlus-Setup-<v>.zip      Windows installer/updater (dist/windows)
+#   CosmonarchyPlus-Mac-Setup-<v>.zip  macOS installer/updater (dist/macos)
+#   CosmonarchyPlus-plugins-<v>.zip    zz-cosmo-plus.qdp + zz-cosmo-rollback.qdp + CrownLink.snp
+#   CosmonarchyPlus-mod-<v>.zip        the pinned game build (Release tree, no .git)
+#   manifest.json + SHA256SUMS.txt     version, pinned build SHA, asset hashes
+#
+# Everything is built at release time against the same pins (pins.json), so a
+# release can never ship a plugin that does not match its game build. The two
+# zips are separate because the plugins change far more often than the build:
+# the Windows updater only re-downloads the mod zip when the pinned build SHA
+# changes, so a normal update is ~2 MB instead of ~1.5 GB.
+#
+# Cut a release by pushing a tag (v0.3.0) or via the Actions tab
+# (workflow_dispatch, version defaults to the VERSION file). See docs/RELEASING.md.
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version to release, e.g. 0.3.0 (defaults to the VERSION file)"
+        required: false
+
+permissions:
+  contents: write
+
+env:
+  BUILD_REPO: saintromuald/cosmonarchy-bw-release
+
+jobs:
+  plugins:
+    name: Build plugins (i686 Windows)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install Rust toolchain and cargo-xwin
+        run: |
+          rustup toolchain install 1.99.0 --profile minimal --target i686-pc-windows-msvc
+          rustup default 1.99.0
+          cargo install cargo-xwin --locked
+
+      # Same toolchain as tools/build.sh: cargo xwin, XWIN_ARCH=x86.
+      # COSMO_PLUS_BUILD_ID stamps the release commit into the DLL (replay tagging).
+      - name: Build cosmo_plus.dll
+        working-directory: plus
+        env:
+          XWIN_ARCH: x86
+          COSMO_PLUS_BUILD_ID: ${{ github.sha }}
+        run: cargo xwin build --target i686-pc-windows-msvc --release
+
+      - name: Build cosmo_rollback.dll
+        working-directory: netcode
+        env:
+          XWIN_ARCH: x86
+        run: cargo xwin build --target i686-pc-windows-msvc --release
+
+      - name: Stage payload
+        run: |
+          mkdir -p out/payload/plugins
+          cp plus/target/i686-pc-windows-msvc/release/cosmo_plus.dll \
+             out/payload/plugins/zz-cosmo-plus.qdp
+          cp netcode/target/i686-pc-windows-msvc/release/cosmo_rollback.dll \
+             out/payload/plugins/zz-cosmo-rollback.qdp
+          ls -l out/payload/plugins
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: plugins
+          path: out/payload/plugins/*
+          if-no-files-found: error
+
+  crownlink:
+    name: Build CrownLink.snp
+    runs-on: windows-latest
+    timeout-minutes: 90
+    steps:
+      # The pin lives in pins.json (this repo), so check it out first.
+      - uses: actions/checkout@v4
+
+      - name: Read CrownLink pin
+        id: pin
+        shell: bash
+        run: |
+          echo "repo=$(jq -r '.crownlink_repo' pins.json)" >> "$GITHUB_OUTPUT"
+          echo "ref=$(jq -r '.crownlink_ref' pins.json)" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/checkout@v4
+        with:
+          repository: ${{ steps.pin.outputs.repo }}
+          ref: ${{ steps.pin.outputs.ref }}
+          path: crownlink
+          # Version.cmake derives the version from the git tag, so the full
+          # history/tags must be present.
+          fetch-depth: 0
+
+      - name: Set up MSVC (x86)
+        uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x86
+
+      - name: Configure
+        working-directory: crownlink
+        run: cmake --preset x86-release
+
+      - name: Build dist SNP
+        working-directory: crownlink
+        run: cmake --build out/build/x86-release --target crownlink_dist
+
+      # The dist SNP must carry its caps archive, or Storm cannot enumerate the
+      # provider and the game never lists CrownLink. Same check the fork's own
+      # CI does; both files are named CrownLink.snp, hence the explicit check.
+      - name: Verify caps archive
+        working-directory: crownlink
+        shell: pwsh
+        run: |
+          $dist = "out/build/x86-release/dist/CrownLink.snp"
+          if (-not (Test-Path $dist)) { throw "missing $dist (crownlink_dist target did not run)" }
+          $bytes = [System.IO.File]::ReadAllBytes($dist)
+          if (-not ([System.Text.Encoding]::ASCII.GetString($bytes).Contains("MPQ" + [char]0x1a))) { throw "dist SNP has no caps.mpq appended" }
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: CrownLink-snp
+          path: crownlink/out/build/x86-release/dist/CrownLink.snp
+          if-no-files-found: error
+
+  bundle:
+    name: Assemble and publish release
+    runs-on: ubuntu-latest
+    needs: [plugins, crownlink]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          fetch-depth: 0
+
+      - name: Resolve version and pins
+        id: meta
+        env:
+          DISPATCH_VERSION: ${{ github.event.inputs.version }}
+        run: |
+          set -euo pipefail
+          if [[ "$GITHUB_REF_TYPE" == "tag" ]]; then
+            VERSION="${GITHUB_REF_NAME#v}"
+          elif [[ -n "$DISPATCH_VERSION" ]]; then
+            VERSION="$DISPATCH_VERSION"
+          else
+            VERSION="$(cat VERSION)"
+          fi
+          BUILD_REF="$(jq -r '.build_ref // "plus"' pins.json)"
+          BUILD_SHA="$(curl -fsSL "https://api.github.com/repos/${BUILD_REPO}/commits/${BUILD_REF}" | jq -r '.sha')"
+          CROWNLINK_REPO="$(jq -r '.crownlink_repo' pins.json)"
+          CROWNLINK_REF="$(jq -r '.crownlink_ref // "master"' pins.json)"
+          CROWNLINK_SHA="$(curl -fsSL "https://api.github.com/repos/${CROWNLINK_REPO}/commits/${CROWNLINK_REF}" | jq -r '.sha')"
+          if [[ -z "$BUILD_SHA" || "$BUILD_SHA" == "null" ]]; then
+            echo "cannot resolve build ref '$BUILD_REF' in $BUILD_REPO" >&2
+            exit 1
+          fi
+          {
+            echo "version=$VERSION"
+            echo "build_sha=$BUILD_SHA"
+            echo "crownlink_sha=$CROWNLINK_SHA"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Download pinned game build
+        env:
+          BUILD_SHA: ${{ steps.meta.outputs.build_sha }}
+        run: curl -fL --retry 3 -o /tmp/game.tar.gz \
+          "https://codeload.github.com/${BUILD_REPO}/tar.gz/${BUILD_SHA}"
+
+      - uses: actions/download-artifact@v4
+
+      - name: Assemble bundle
+        run: |
+          set -euo pipefail
+          mkdir -p bundle/Release bundle/Starcraft
+          tar -xzf /tmp/game.tar.gz -C bundle/Release --strip-components=1
+          # Overlay the freshly built plugins (the snapshot may carry an older
+          # committed zz-cosmo-rollback.qdp) and the rollback-capable SNP.
+          cp plugins/zz-cosmo-plus.qdp bundle/Release/plugins/
+          cp plugins/zz-cosmo-rollback.qdp bundle/Release/plugins/
+          cp CrownLink-snp/CrownLink.snp bundle/Starcraft/CrownLink.snp
+
+      - name: Package release assets
+        env:
+          VERSION: ${{ steps.meta.outputs.version }}
+        run: |
+          set -euo pipefail
+          mkdir -p release
+          (cd bundle && zip -qr "../release/CosmonarchyPlus-mod-${VERSION}.zip" Release)
+          mkdir -p plugins-zip/plugins plugins-zip/Starcraft
+          cp plugins/*.qdp plugins-zip/plugins/
+          cp CrownLink-snp/CrownLink.snp plugins-zip/Starcraft/
+          (cd plugins-zip && zip -qr "../release/CosmonarchyPlus-plugins-${VERSION}.zip" .)
+          (cd dist/windows && zip -qr "../../release/CosmonarchyPlus-Setup-${VERSION}.zip" .)
+          # Mac Setup: the installer command + its README + the shared Wine
+          # provisioning script (single source of truth for the wine tinkering).
+          mkdir -p mac-zip
+          cp dist/macos/* mac-zip/
+          cp packaging/common/provision-prefix.sh mac-zip/
+          (cd mac-zip && zip -qr "../release/CosmonarchyPlus-Mac-Setup-${VERSION}.zip" .)
+
+      - name: Manifest and checksums
+        env:
+          VERSION: ${{ steps.meta.outputs.version }}
+          BUILD_SHA: ${{ steps.meta.outputs.build_sha }}
+          CROWNLINK_SHA: ${{ steps.meta.outputs.crownlink_sha }}
+        run: |
+          set -euo pipefail
+          cd release
+          sha256sum CosmonarchyPlus-*.zip > SHA256SUMS.txt
+          assets='{}'
+          for f in CosmonarchyPlus-*.zip; do
+            assets="$(printf '%s' "$assets" | jq --arg n "$f" \
+              --arg s "$(sha256sum "$f" | cut -d' ' -f1)" \
+              --arg b "$(stat -c%s "$f")" \
+              '. + {($n): {sha256: $s, bytes: ($b|tonumber)}}')"
+          done
+          jq -n \
+            --arg product "cosmonarchy-plus" \
+            --arg version "$VERSION" \
+            --arg build_repo "$BUILD_REPO" \
+            --arg build_ref "$BUILD_SHA" \
+            --arg crownlink_repo "$(jq -r '.crownlink_repo' ../pins.json)" \
+            --arg crownlink_ref "$CROWNLINK_SHA" \
+            --arg released "$(date -u +%F)" \
+            --argjson plus_abi 1 \
+            --argjson assets "$assets" \
+            '{product: $product, version: $version,
+              build_repo: $build_repo, build_ref: $build_ref,
+              crownlink_repo: $crownlink_repo, crownlink_ref: $crownlink_ref,
+              released: $released, plus_abi: $plus_abi, assets: $assets}' \
+            > manifest.json
+
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ steps.meta.outputs.version }}
+          BUILD_SHA: ${{ steps.meta.outputs.build_sha }}
+        run: |
+          set -euo pipefail
+          # A workflow_dispatch has no tag; create one so releases stay 1:1 with tags.
+          if ! git rev-parse -q --verify "refs/tags/v${VERSION}" >/dev/null; then
+            git tag "v${VERSION}"
+            git push origin "refs/tags/v${VERSION}"
+          fi
+          NOTES="Cosmonarchy Plus ${VERSION} - pinned build ${BUILD_REPO}@${BUILD_SHA}. See the repo changelog for what changed."
+          cd release
+          if gh release view "v${VERSION}" >/dev/null 2>&1; then
+            echo "release v${VERSION} already exists; uploading assets"
+            gh release upload "v${VERSION}" CosmonarchyPlus-*.zip SHA256SUMS.txt manifest.json --clobber
+          else
+            gh release create "v${VERSION}" --title "Cosmonarchy Plus ${VERSION}" \
+              --notes "$NOTES" \
+              CosmonarchyPlus-*.zip SHA256SUMS.txt manifest.json
+          fi

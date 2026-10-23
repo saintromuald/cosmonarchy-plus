@@ -1,0 +1,79 @@
+# Maintainer: saintromuald
+# Cosmonarchy Plus - gameplay/QoL fork of Cosmonarchy BW, packaged from the
+# project's GitHub release assets (no build step; the DLLs are built by CI).
+#
+#   - the mod zip is the pinned game build (Release tree, ~1.5 GB download)
+#   - the plugins zip carries zz-cosmo-plus.qdp, zz-cosmo-rollback.qdp and the
+#     rollback-capable CrownLink.snp
+#
+# The package installs the pristine tree to /opt/cosmonarchy-plus; the launcher
+# mirrors it into ~/.local/share/cosmonarchy-plus on first run (like the
+# Windows "separate copy" model) so the game can write logs/saves as the user.
+# Starcraft (the base game) is copied once from an existing Cosmonarchy install.
+#
+# Bump pkgver to the release tag, then: updpkgsums && makepkg -si
+
+pkgname=cosmonarchy-plus-bin
+pkgver=0.2.0
+pkgrel=1
+pkgdesc="Cosmonarchy Plus: gameplay/QoL fork of Cosmonarchy BW with optional rollback netcode (bundled release build, runs via umu + GE-Proton)"
+arch=('x86_64')
+url="https://github.com/saintromuald/cosmonarchy-plus"
+license=('custom')
+depends=(
+  'bash'
+  'unzip'
+  'rsync'
+  'wine'                # prefix provisioning (wineboot/winecfg/reg) and umu support
+  'umu-launcher'        # runs the game through Proton
+  'glibc'
+)
+optdepends=(
+  'proton-ge-custom-bin: GE-Proton runtime used by the launcher (recommended)'
+)
+# The mod/plugins zips are fetched from the GitHub release for pkgver. The
+# remaining entries are local files that ship in the AUR git repo next to this
+# PKGBUILD (copy packaging/aur/* and packaging/common/provision-prefix.sh).
+source=(
+  "CosmonarchyPlus-mod-${pkgver}.zip::https://github.com/saintromuald/cosmonarchy-plus/releases/download/v${pkgver}/CosmonarchyPlus-mod-${pkgver}.zip"
+  "CosmonarchyPlus-plugins-${pkgver}.zip::https://github.com/saintromuald/cosmonarchy-plus/releases/download/v${pkgver}/CosmonarchyPlus-plugins-${pkgver}.zip"
+  "cosmonarchy-plus.sh"
+  "provision-prefix.sh"
+  "cosmonarchy-plus.desktop"
+  "cosmonarchy-plus-host.desktop"
+  "cosmonarchy-plus-guest.desktop"
+)
+# Fill with: updpkgsums
+sha256sums=('SKIP'
+            'SKIP'
+            'SKIP'
+            'SKIP'
+            'SKIP'
+            'SKIP'
+            'SKIP')
+
+package() {
+  install -d "$pkgdir/opt/cosmonarchy-plus"
+
+  bsdtar -xf "CosmonarchyPlus-mod-${pkgver}.zip" -C "$pkgdir/opt/cosmonarchy-plus"
+  bsdtar -xf "CosmonarchyPlus-plugins-${pkgver}.zip" -C "$pkgdir/opt/cosmonarchy-plus"
+
+  # The mod zip already carries the fresh plugins inside Release/plugins/ (the
+  # CI overlays them before zipping); the plugins zip is only needed here for
+  # Starcraft/CrownLink.snp. Drop the stray top-level plugins/ it leaves.
+  rm -rf "$pkgdir/opt/cosmonarchy-plus/plugins"
+
+  # Launcher + the Wine provisioning that made the game work (ddraw override,
+  # Windows 10 mode, cnc-ddraw next to the exe).
+  install -Dm755 "$srcdir/cosmonarchy-plus.sh" "$pkgdir/usr/bin/cosmonarchy-plus"
+  install -Dm755 "$srcdir/provision-prefix.sh" "$pkgdir/opt/cosmonarchy-plus/provision-prefix.sh"
+
+  # Desktop entries: Solo (default), Host, Guest.
+  install -Dm644 "$srcdir/cosmonarchy-plus.desktop"       "$pkgdir/usr/share/applications/cosmonarchy-plus.desktop"
+  install -Dm644 "$srcdir/cosmonarchy-plus-host.desktop"  "$pkgdir/usr/share/applications/cosmonarchy-plus-host.desktop"
+  install -Dm644 "$srcdir/cosmonarchy-plus-guest.desktop" "$pkgdir/usr/share/applications/cosmonarchy-plus-guest.desktop"
+
+  if [[ -f "$pkgdir/opt/cosmonarchy-plus/Release/icon.ico" ]]; then
+    install -Dm644 "$pkgdir/opt/cosmonarchy-plus/Release/icon.ico" "$pkgdir/usr/share/pixmaps/cosmonarchy-plus.ico"
+  fi
+}

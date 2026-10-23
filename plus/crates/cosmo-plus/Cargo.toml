@@ -21,8 +21,12 @@ cosmo-plus-core = { path = "../cosmo-plus-core" }
 version = "0.61"
 features = [
     "Win32_Foundation",
+    "Win32_Security",
+    "Win32_Storage_FileSystem",
     "Win32_System_Diagnostics_Debug",
     "Win32_System_Diagnostics_ToolHelp",
+    "Win32_System_IO",
+    "Win32_System_Kernel",
     "Win32_System_Memory",
     "Win32_System_Threading",
     "Win32_System_LibraryLoader",

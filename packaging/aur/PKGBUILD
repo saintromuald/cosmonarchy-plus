@@ -26,6 +26,7 @@ depends=(
   'rsync'
   'wine'                # prefix provisioning (wineboot/winecfg/reg) and umu support
   'umu-launcher'        # runs the game through Proton
+  'python'              # temp.mpq integrity check before each launch
   'glibc'
 )
 optdepends=(
@@ -39,12 +40,14 @@ source=(
   "CosmonarchyPlus-plugins-${pkgver}.zip::https://github.com/saintromuald/cosmonarchy-plus/releases/download/v${pkgver}/CosmonarchyPlus-plugins-${pkgver}.zip"
   "cosmonarchy-plus.sh"
   "provision-prefix.sh"
+  "cosmo-tempmpq-check"
   "cosmonarchy-plus.desktop"
   "cosmonarchy-plus-host.desktop"
   "cosmonarchy-plus-guest.desktop"
 )
 # Fill with: updpkgsums
 sha256sums=('SKIP'
+            'SKIP'
             'SKIP'
             'SKIP'
             'SKIP'
@@ -64,9 +67,10 @@ package() {
   rm -rf "$pkgdir/opt/cosmonarchy-plus/plugins"
 
   # Launcher + the Wine provisioning that made the game work (ddraw override,
-  # Windows 10 mode, cnc-ddraw next to the exe).
+  # Windows 10 mode, cnc-ddraw next to the exe) + the temp.mpq integrity check.
   install -Dm755 "$srcdir/cosmonarchy-plus.sh" "$pkgdir/usr/bin/cosmonarchy-plus"
   install -Dm755 "$srcdir/provision-prefix.sh" "$pkgdir/opt/cosmonarchy-plus/provision-prefix.sh"
+  install -Dm755 "$srcdir/cosmo-tempmpq-check" "$pkgdir/opt/cosmonarchy-plus/cosmo-tempmpq-check"
 
   # Desktop entries: Solo (default), Host, Guest.
   install -Dm644 "$srcdir/cosmonarchy-plus.desktop"       "$pkgdir/usr/share/applications/cosmonarchy-plus.desktop"

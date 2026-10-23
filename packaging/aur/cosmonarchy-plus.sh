@@ -91,6 +91,17 @@ export WINEPREFIX="$PREFIX"
 WINE="${WINE:-wine}" GAMEDIR="$GAMEDIR" \
   "$APP_DIR/provision-prefix.sh" >/dev/null
 
+# ---- heal a truncated temp.mpq ----------------------------------------------
+# If the game was killed during the hotloader's rebuild (~1 min black screen),
+# temp.mpq is left incomplete and map start fails with "Bad length". Removing
+# it makes the game rebuild it cleanly on this launch.
+if [[ -f "$GAMEDIR/Release/temp.mpq" ]] && command -v python3 >/dev/null; then
+  if ! python3 "$APP_DIR/cosmo-tempmpq-check" "$GAMEDIR/Release/temp.mpq" "$GAMEDIR/Release/mpq" >/dev/null 2>&1; then
+    echo "cosmonarchy-plus: temp.mpq is incomplete; rebuilding game data on this launch (~1 min black screen)."
+    rm -f "$GAMEDIR/Release/temp.mpq"
+  fi
+fi
+
 # ---- arm the rollback netcode (host/guest only) ------------------------------
 CONF="$GAMEDIR/Release/cosmo_rollback.conf"
 rm -f "$CONF"

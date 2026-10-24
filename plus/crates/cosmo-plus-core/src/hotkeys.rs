@@ -8,6 +8,12 @@ pub const DEFAULT_IDLE_WORKER_KEY: &str = "F9";
 /// now the idle-worker key, F10 the menu, F11 the HUD toggle).
 pub const DEFAULT_LARVA_KEY: &str = "F12";
 
+/// Default subgroup-cycle hotkey: Tab (VK 0x09). Unbound everywhere in stock Brood
+/// War and in the mod's hotkey layer (the engine's key handler ignores it — see
+/// `tab_cycle.rs`), so it is dedicated to SC2-style subgroup cycling. Shift+Tab
+/// cycles backward; `CM_PLUS_TAB_PREV_KEY` may assign a separate backward key.
+pub const DEFAULT_TAB_KEY: &str = "TAB";
+
 /// Parse a hotkey name into a virtual-key code.
 ///
 /// Accepts `F1`–`F12`, single letters/digits, `SPACE`/`TAB`/`HOME`/`END`/`DELETE`/

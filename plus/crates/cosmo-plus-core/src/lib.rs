@@ -15,5 +15,6 @@ pub mod draft;
 pub mod hotkeys;
 pub mod larva;
 pub mod saturation;
+pub mod subgroups;
 pub mod yaml;
 pub mod zoom;

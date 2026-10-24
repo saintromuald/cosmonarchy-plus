@@ -46,6 +46,19 @@ replay on vanilla Cosmonarchy.
    are selected through the engine's selection routine (network-synced). No digits
    = select all. Digit keys are swallowed during entry so control groups never
    fire. Configure with `CM_PLUS_LARVA_KEY` in `cosmo_plus.conf`.
+8. **SC2-style Tab subgroup cycling** — with a mixed selection (several unit types,
+   or several building types on one hotkey), **Tab** cycles the *active subgroup*
+   forward and **Shift+Tab** backward, the way StarCraft II's "Next Subgroup" works.
+   The active subgroup's units move to the front of the selection, so their buttons
+   lead the command card and win the hotkeys — press Tab until the spellcaster or
+   production building you want is active, then cast/produce immediately. The
+   whole selection stays selected, so move/attack orders still apply to everything
+   (exactly like SC2), and a fresh selection resets the cycle. Tab is dedicated to
+   this: it is unbound in stock Brood War and in the mod's hotkey layer, and the
+   plugin ignores it while chat or a dialog is open, so the key is never stolen.
+   Works with the mod's extended 240-unit selections. Configure with
+   `CM_PLUS_TAB_KEY` / `CM_PLUS_TAB_PREV_KEY` (separate backward key) in
+   `cosmo_plus.conf`; `CM_PLUS_NO_TAB_CYCLE=1` disables it.
 
 ## Build & install
 

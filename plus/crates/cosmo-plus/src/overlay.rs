@@ -794,6 +794,9 @@ fn install_changes() {
     crate::log::log(&format!(
         "[cosmo-plus] changes panel: VK 0x{vk:02X} toggles changes vs OG"
     ));
+    if crate::config::env_flag("CM_PLUS_MENU_SELFTEST") {
+        unsafe { selftest_menu() };
+    }
 }
 
 /// Poll the panel hotkey on its rising edge (draw pass = view-local input).
@@ -983,12 +986,17 @@ pub(crate) unsafe fn patch_game_menu() {
     if !title.to_ascii_lowercase().windows(4).any(|w| w == b"game") {
         return;
     }
+    patch_chain(root);
+}
 
+/// Walk a dialog chain, relabel the first control whose text contains "help"
+/// and take over its interaction. Returns true when it patched something.
+unsafe fn patch_chain(root: *mut BinDlg) -> bool {
     let mut dlg = root;
     let mut guard = 0;
     while guard < 64 {
         if !readable(dlg as *const u8, core::mem::size_of::<BinDlg>()) {
-            return;
+            return false;
         }
         if let Some(bytes) = read_cstr((*dlg).text, 64) {
             let lower = bytes.to_ascii_lowercase();
@@ -1000,16 +1008,40 @@ pub(crate) unsafe fn patch_game_menu() {
                         "[cosmo-plus] game menu: Help relabelled to Plus Changes (P)",
                     );
                 }
-                return;
+                return true;
             }
         }
         let next = (*dlg).next;
         if next.is_null() {
-            return;
+            return false;
         }
         dlg = next;
         guard += 1;
     }
+    false
+}
+
+/// Runtime self-test of the dialog patching (CM_PLUS_MENU_SELFTEST=1): builds a
+/// fake GameMenu chain in this process, patches it, verifies the relabel, then
+/// restores the game's global pointer.
+pub(crate) unsafe fn selftest_menu() {
+    let mut root: BinDlg = core::mem::zeroed();
+    let mut help: BinDlg = core::mem::zeroed();
+    root.text = b"GameMenu\0".as_ptr();
+    help.text = b"hHelp (\0".as_ptr();
+    root.next = &mut help;
+
+    let global = G_POPUP_DIALOG as *mut *mut BinDlg;
+    let saved = *global;
+    *global = &mut root;
+    let found = patch_chain(&mut root);
+    *global = saved;
+
+    let ok = found && help.text == MENU_TEXT.as_ptr() && help.fxn_interact.is_some();
+    crate::log::log(&format!(
+        "[cosmo-plus] game menu: selftest {}",
+        if ok { "PASS (Help relabelled and handler installed)" } else { "FAIL" }
+    ));
 }
 
 /// Draw a small panel of text lines fixed to the screen (draft UI). Screen space is

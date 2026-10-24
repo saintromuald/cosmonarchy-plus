@@ -176,6 +176,7 @@ pub fn is_resource_node(id: u16) -> bool {
 /// `TextColor` values from `BW/enumerations.h` (the values `get_color_handle` maps to a
 /// font palette entry).
 pub mod text_color {
+    pub const BLACK: u8 = 0x00;
     pub const WHITE: u8 = 0x04;
     pub const YELLOW: u8 = 0x03;
     pub const RED: u8 = 0x06;

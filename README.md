@@ -60,13 +60,14 @@ replay on vanilla Cosmonarchy.
    `CM_PLUS_TAB_KEY` / `CM_PLUS_TAB_PREV_KEY` (separate backward key) in
    `cosmo_plus.conf`; `CM_PLUS_NO_TAB_CYCLE=1` disables it.
 
-8. **Changes-vs-OG panel** — press **Pause/Break** in a game for a compact,
-   line-by-line list of what Plus changes compared with stock Cosmonarchy
-   (saturation, gas tiers, advanced workers, ultraload, zoom, Tab cycling,
-   camera pan, F9/F12, lobby game types, rollback, crash capture). A short hint
-   shows for the first ~20 seconds of each game. Configure the key with
-   `CM_PLUS_CHANGES_KEY`; the panel is drawn in the draw pass, so it is
-   local-only and safe with rollback.
+8. **Changes-vs-OG panel** — in the in-game menu (**F10**) the Help entry is
+   **Plus Changes (P)**: choose it (or press **P**) for a compact, line-by-line
+   list of what Plus changes compared with stock Cosmonarchy (saturation, gas
+   tiers, advanced workers, ultraload, zoom, Tab cycling, camera pan, F9/F12,
+   lobby game types, rollback, crash capture). **Pause/Break** toggles the same
+   panel anywhere; a short hint shows for the first ~20 seconds of each game.
+   Configure the panel key with `CM_PLUS_CHANGES_KEY`; the panel is drawn in
+   the draw pass, so it is local-only and safe with rollback.
 
 ## Build & install
 

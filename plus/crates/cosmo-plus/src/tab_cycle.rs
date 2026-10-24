@@ -68,7 +68,6 @@ const EXTENDED_LIMIT: usize = 240;
 /// Stock 1.16.1 selection limit.
 const VANILLA_LIMIT: usize = 12;
 
-const VK_TAB: i32 = 0x09;
 const VK_SHIFT: i32 = 0x10;
 
 /// How many frames the subgroup indicator stays visible after a Tab press (~1.5 s).
@@ -377,12 +376,6 @@ pub(crate) unsafe fn poll() {
         count,
         rotation.active_unit_id
     ));
-}
-
-/// The 1-based active group index (for the indicator).
-fn active_group() -> u32 {
-    let cycle = CYCLE.lock().unwrap();
-    cycle.active % cycle.groups.max(1) + 1
 }
 
 /// Indicator state for the overlay: `Some((active, total))` while the Tab indicator

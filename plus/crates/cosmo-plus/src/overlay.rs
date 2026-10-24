@@ -989,9 +989,50 @@ pub(crate) unsafe fn patch_game_menu() {
     patch_chain(root);
 }
 
-/// Walk a dialog chain, relabel the first control whose text contains "help"
-/// and take over its interaction. Returns true when it patched something.
+/// Walk a dialog chain. The new "Plus Changes" row added to gamemenu.bin is
+/// picked up by its text; its handler is installed and it is shown only when
+/// Save Game is hidden (multiplayer) - in single player the free slot is used
+/// by Save, so our row would overlap it. Falls back to relabelling Help when
+/// the dialog template has no Plus Changes row.
 unsafe fn patch_chain(root: *mut BinDlg) -> bool {
+    let mut dlg = root;
+    let mut guard = 0;
+    let mut our: *mut BinDlg = core::ptr::null_mut();
+    let mut save_visible = false;
+    while guard < 64 {
+        if !readable(dlg as *const u8, core::mem::size_of::<BinDlg>()) {
+            return false;
+        }
+        if let Some(bytes) = read_cstr((*dlg).text, 64) {
+            let lower = bytes.to_ascii_lowercase();
+            if lower.windows(12).any(|w| w == b"plus changes") {
+                our = dlg;
+            } else if lower.windows(9).any(|w| w == b"save game") && (*dlg).flags & 0x8 != 0 {
+                save_visible = true;
+            }
+        }
+        let next = (*dlg).next;
+        if next.is_null() {
+            break;
+        }
+        dlg = next;
+        guard += 1;
+    }
+
+    if !our.is_null() {
+        if save_visible {
+            (*our).flags &= !0x8;
+        } else {
+            (*our).flags |= 0x8;
+        }
+        if (*our).fxn_interact != Some(changes_menu_interact) {
+            (*our).fxn_interact = Some(changes_menu_interact);
+            crate::log::log("[cosmo-plus] game menu: Plus Changes row wired up");
+        }
+        return true;
+    }
+
+    // Older dialog template without the added row: relabel Help instead.
     let mut dlg = root;
     let mut guard = 0;
     while guard < 64 {
@@ -1026,21 +1067,38 @@ unsafe fn patch_chain(root: *mut BinDlg) -> bool {
 /// restores the game's global pointer.
 pub(crate) unsafe fn selftest_menu() {
     let mut root: BinDlg = core::mem::zeroed();
-    let mut help: BinDlg = core::mem::zeroed();
+    let mut save: BinDlg = core::mem::zeroed();
+    let mut plus: BinDlg = core::mem::zeroed();
     root.text = b"GameMenu\0".as_ptr();
-    help.text = b"hHelp (\0".as_ptr();
-    root.next = &mut help;
+    save.text = b"sSave Game (\0".as_ptr();
+    save.flags = 0x0A18; // visible: single player
+    plus.text = b"pPlus Changes (\0".as_ptr();
+    plus.flags = 0x0A18;
+    root.next = &mut save;
+    save.next = &mut plus;
 
     let global = G_POPUP_DIALOG as *mut *mut BinDlg;
     let saved = *global;
     *global = &mut root;
     let found = patch_chain(&mut root);
+    let hidden_in_sp = plus.flags & 0x8 == 0;
+    save.flags &= !0x8; // multiplayer: Save is hidden, the row should show
+    let found2 = patch_chain(&mut root);
+    let visible_in_mp = plus.flags & 0x8 != 0;
     *global = saved;
 
-    let ok = found && help.text == MENU_TEXT.as_ptr() && help.fxn_interact.is_some();
+    let ok = found
+        && found2
+        && hidden_in_sp
+        && visible_in_mp
+        && plus.fxn_interact.is_some();
     crate::log::log(&format!(
         "[cosmo-plus] game menu: selftest {}",
-        if ok { "PASS (Help relabelled and handler installed)" } else { "FAIL" }
+        if ok {
+            "PASS (Plus Changes row wired, hidden in SP, shown in MP)"
+        } else {
+            "FAIL"
+        }
     ));
 }
 

@@ -10,7 +10,7 @@
 //! the game tick counter.
 
 use core::fmt::Write as _;
-use std::sync::atomic::{AtomicU32, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicUsize, Ordering};
 
 use windows_sys::Win32::Foundation::{HANDLE, GENERIC_WRITE, INVALID_HANDLE_VALUE};
 use windows_sys::Win32::Storage::FileSystem::{
@@ -25,6 +25,11 @@ static TICK: AtomicU32 = AtomicU32::new(0);
 /// Last dat table pointers resolved by data::init() (0 = never/None).
 pub static LAST_RESOLVED_UNITS: AtomicUsize = AtomicUsize::new(0);
 pub static LAST_RESOLVED_FLINGY: AtomicUsize = AtomicUsize::new(0);
+
+/// Re-entrancy guard for the vectored handler (see `crash_handler`).
+static IN_HANDLER: AtomicBool = AtomicBool::new(false);
+/// `EXCEPTION_ACCESS_VIOLATION` (0xC0000005).
+const ACCESS_VIOLATION: u32 = 0xC000_0005;
 
 static mut LOG: HANDLE = INVALID_HANDLE_VALUE;
 
@@ -78,6 +83,20 @@ unsafe fn write_log(buf: &[u8], len: usize) {
 }
 
 unsafe extern "system" fn crash_handler(info: *mut EXCEPTION_POINTERS) -> i32 {
+    // Re-entrancy guard: a fault *inside* this handler (as happened when the old
+    // diagnostic reads poked past the module image) would re-dispatch to this same
+    // handler and recurse until a stack overflow. Once we are in here, any nested
+    // exception passes straight through to StarCraft's own handler.
+    if IN_HANDLER.swap(true, Ordering::SeqCst) {
+        return EXCEPTION_CONTINUE_SEARCH;
+    }
+    let _ = write_av_report(info);
+    IN_HANDLER.store(false, Ordering::SeqCst);
+    // Let StarCraft's own handler take over: EXCEPTION_CONTINUE_SEARCH.
+    EXCEPTION_CONTINUE_SEARCH
+}
+
+fn write_av_report(info: *mut EXCEPTION_POINTERS) {
     let mut buf = [0u8; 512];
     let mut s = Buf::new(&mut buf);
     let _ = write!(
@@ -85,25 +104,37 @@ unsafe extern "system" fn crash_handler(info: *mut EXCEPTION_POINTERS) -> i32 {
         "[cosmo-crash] {}\n",
         std::env!("COSMO_PLUS_GIT_REV")
     );
-    if !info.is_null() {
-        let exc = &*(*info).ExceptionRecord;
-        let ctx = &*(*info).ContextRecord;
-        let _ = write!(
-            s,
-            "  exception={:#010x} addr={:#010x}\n",
-            exc.ExceptionCode as usize, exc.ExceptionAddress as usize
-        );
-        let _ = write!(
-            s,
-            "  eax={:#010x} ecx={:#010x} edx={:#010x} ebx={:#010x}\n",
-            ctx.Eax, ctx.Ecx, ctx.Edx, ctx.Ebx
-        );
-        let _ = write!(
-            s,
-            "  esi={:#010x} edi={:#010x} esp={:#010x} ebp={:#010x} eip={:#010x}\n",
-            ctx.Esi, ctx.Edi, ctx.Esp, ctx.Ebp, ctx.Eip
-        );
+    if info.is_null() {
+        let len = s.pos();
+        drop(s);
+        unsafe { write_log(&buf, len) };
+        return;
     }
+    let exc = unsafe { &*(*info).ExceptionRecord };
+    // Only access violations are ours to describe; everything else (debug prints,
+    // breakpoints, C++ throws the engine handles) passes through untouched.
+    if exc.ExceptionCode as u32 != ACCESS_VIOLATION {
+        let len = s.pos();
+        drop(s);
+        unsafe { write_log(&buf, len) };
+        return;
+    }
+    let ctx = unsafe { &*(*info).ContextRecord };
+    let _ = write!(
+        s,
+        "  exception={:#010x} addr={:#010x}\n",
+        exc.ExceptionCode as usize, exc.ExceptionAddress as usize
+    );
+    let _ = write!(
+        s,
+        "  eax={:#010x} ecx={:#010x} edx={:#010x} ebx={:#010x}\n",
+        ctx.Eax, ctx.Ecx, ctx.Edx, ctx.Ebx
+    );
+    let _ = write!(
+        s,
+        "  esi={:#010x} edi={:#010x} esp={:#010x} ebp={:#010x} eip={:#010x}\n",
+        ctx.Esi, ctx.Edi, ctx.Esp, ctx.Ebp, ctx.Eip
+    );
     let _ = write!(
         s,
         "  tick={} last_resolve units={:#x} flingy={:#x}\n",
@@ -111,35 +142,9 @@ unsafe extern "system" fn crash_handler(info: *mut EXCEPTION_POINTERS) -> i32 {
         LAST_RESOLVED_UNITS.load(Ordering::Relaxed),
         LAST_RESOLVED_FLINGY.load(Ordering::Relaxed),
     );
-    #[cfg(target_arch = "x86")]
-    {
-        use windows_sys::Win32::System::Memory::{VirtualQuery, MEMORY_BASIC_INFORMATION};
-        let mut mbi: MEMORY_BASIC_INFORMATION = core::mem::zeroed();
-        let self_addr = crash_handler as usize as *const core::ffi::c_void;
-        if VirtualQuery(
-            self_addr as *const core::ffi::c_void,
-            &mut mbi,
-            core::mem::size_of::<MEMORY_BASIC_INFORMATION>(),
-        ) != 0
-        {
-            let base = mbi.AllocationBase as usize;
-            let _ = write!(s, "  image_base={:#x}\n", base);
-            for (label, rva) in [
-                ("0x5187e8", 0x5187e8usize),
-                ("0x10074808", 0x10074808usize),
-                ("0x1007480c", 0x1007480cusize),
-                ("0x100752a2", 0x100752a2usize),
-            ] {
-                let v = *(base.wrapping_add(rva) as *const u32);
-                let _ = write!(s, "  [{label}] = {v:#010x}\n");
-            }
-        }
-    }
     let len = s.pos();
     drop(s);
-    write_log(&buf, len);
-    // Let StarCraft's own handler take over: EXCEPTION_CONTINUE_SEARCH.
-    EXCEPTION_CONTINUE_SEARCH
+    unsafe { write_log(&buf, len) };
 }
 
 /// Install the crash handler + panic hook. Call once from plugin init.

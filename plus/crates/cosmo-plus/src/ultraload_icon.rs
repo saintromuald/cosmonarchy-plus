@@ -25,6 +25,51 @@ use cosmo_plus_core::saturation;
 
 /// `g_buttonset_table` (ButtonSet*), fixed address in the 1.16.1 exe.
 const BUTTONSET_TABLE_ADDR: usize = 0x0051_87E8;
+
+/// Whether the pointer read from [`BUTTONSET_TABLE_ADDR`] is a plausible, mapped
+/// table. The stock 1.16.1 exe keeps the buttonset table at that address, but the
+/// gptp builds relocate it (CCMU extender): the slot then holds ordinary dat bytes,
+/// and dereferencing them faults the process. The icon is cosmetic — when the table
+/// is not there, the patch must skip instead of crashing the game.
+fn button_table_valid(table: *mut ButtonSet) -> bool {
+    const MEM_COMMIT: u32 = 0x1000;
+    let addr = table as usize;
+    // Reject null and obviously-not-pointers (small values / unaligned).
+    if addr < 0x1_0000 || addr & 3 != 0 {
+        return false;
+    }
+    let entries = bw_dat::UnitId::entry_amount();
+    let len = if entries != u32::MAX {
+        (entries as usize).saturating_mul(std::mem::size_of::<ButtonSet>())
+    } else {
+        // Entry count unavailable: require at least one entry's worth of mapping.
+        std::mem::size_of::<ButtonSet>()
+    };
+    if len == 0 {
+        return false;
+    }
+    let end = match addr.checked_add(len) {
+        Some(e) => e,
+        None => return false,
+    };
+    unsafe {
+        let mut mbi: windows_sys::Win32::System::Memory::MEMORY_BASIC_INFORMATION =
+            core::mem::zeroed();
+        if windows_sys::Win32::System::Memory::VirtualQuery(
+            table as *const core::ffi::c_void,
+            &mut mbi,
+            core::mem::size_of::<windows_sys::Win32::System::Memory::MEMORY_BASIC_INFORMATION>(),
+        ) == 0
+        {
+            return false;
+        }
+        if mbi.State != MEM_COMMIT {
+            return false;
+        }
+        let region_end = (mbi.BaseAddress as usize).saturating_add(mbi.RegionSize);
+        region_end >= end
+    }
+}
 /// `BTNSACT_DoNothing` — a real engine function, safe to invoke.
 const ACT_DO_NOTHING: usize = 0x0042_3180;
 /// Placeholder icon: `IconId::UseStimpack`.
@@ -108,9 +153,14 @@ pub(crate) fn install_once() {
 }
 
 unsafe fn patch_set(index: usize, unit_id: u16) -> bool {
-    let table = unsafe { *(BUTTONSET_TABLE_ADDR as *const *mut ButtonSet) };
-    if table.is_null() {
-        crate::log::log("[cosmo-plus] ultraload icon: button table is null; skipped");
+    let table = *(BUTTONSET_TABLE_ADDR as *const *mut ButtonSet);
+    if !button_table_valid(table) {
+        crate::log::log(&format!(
+            "[cosmo-plus] ultraload icon: g_buttonset_table @0x{BUTTONSET_TABLE_ADDR:08X} \
+             holds 0x{:08X}, which is not a live table pointer (the build relocated \
+             it?); icon patch skipped for unit {unit_id}",
+            table as usize
+        ));
         return false;
     }
     if PATCHED[index].swap(true, Ordering::SeqCst) {

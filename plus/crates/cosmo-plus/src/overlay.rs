@@ -471,18 +471,30 @@ unsafe fn draw_pass() {
     *(G_PRINT_XY_ALIGNMENT as *mut u8) = 0x11;
 
     let mut buf = [0u8; 16];
+    // Only the local player's own bases get labels: the counts reveal which
+    // mineral lines are worked, i.e. where expansions are — nothing is drawn
+    // for other players (or the AI), and nothing of yours is shown to them.
+    let local = local_player_id() as u8;
     for n in nodes {
+        if n.owner != local {
+            continue;
+        }
         if n.is_gas {
             draw_node(n, &mut buf);
         }
     }
     // SC2-style: the mineral-line count sits above the town hall, not on the fields.
     for d in &cache.depots {
+        if d.owner != local {
+            continue;
+        }
         draw_depot(d, &mut buf);
     }
     // Nydus numbering: canal/exit pairs, in-world and on the minimap.
     crate::nydus::draw_world(&mut buf);
     crate::nydus::draw_minimap(&mut buf);
+    // Camera hotkey labels (C1-C8) on the minimap.
+    crate::cam_labels::draw_minimap(&mut buf);
     set_font_handle(core::ptr::null_mut());
 }
 

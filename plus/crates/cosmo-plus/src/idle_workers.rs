@@ -1,12 +1,21 @@
-//! Idle-worker hotkey: one key press selects every idle worker of the local player.
+//! Idle-worker hotkey: one key press selects a single idle worker of the local
+//! player, and the HUD shows the live idle-worker count above the minimap
+//! (drawn by the overlay's `draw_idle_counter`, SC2-style).
 //!
-//! An idle worker is a completed worker unit whose `current_harvest_target` is null —
-//! it is not gathering, not carrying cargo back, and not walking to a node. The
-//! selection goes through the engine's own click-selection routine
+//! An idle worker is a completed worker unit that is not gathering, not carrying
+//! cargo back, **not moving**, and either has no harvest link or sits on a
+//! parked order (Stop / Guard / PlayerGuard — the game parks jobless workers on
+//! those, and some workers, e.g. Zerg Agrileth, keep a stale harvest target
+//! while parked; the parked orders catch those too).
+//!
+//! The selection goes through the engine's own click-selection routine
 //! (`select_units_if_alt_not_held`, `BW/bwhelper.cpp`, 0x0046FA00), which replaces the
 //! current selection, plays the selection sound and **sends the synced select command**
 //! to peers — so the selection is network-consistent and rollback-safe (it travels in
 //! the normal turn stream, never as a raw memory write).
+//!
+//! One press selects **one** idle worker (the first one found); each further press
+//! selects the next, SC2-F1 style.
 //!
 //! The hotkey is polled from the draw pass (view-local input, like the draft picks),
 //! so it never fires during a rollback re-simulation.
@@ -22,15 +31,14 @@ use std::sync::atomic::{AtomicU16, Ordering};
 use cosmo_plus_core::hotkeys::{parse_key, DEFAULT_IDLE_WORKER_KEY};
 use cosmo_plus_core::saturation::worker_tier;
 
-/// Main orders a worker can hold while it is genuinely idle: the game parks
-/// jobless workers on `Guard` (0x02) / `PlayerGuard` (0x03).
+/// Orders a jobless worker can hold while parked: the game parks workers on
+/// `Stop` (0x01), `Guard` (0x02) and `PlayerGuard` (0x03).
+const ORDER_STOP: u8 = 0x01;
 const ORDER_GUARD: u8 = 0x02;
 const ORDER_PLAYER_GUARD: u8 = 0x03;
 
 /// A worker is idle when it is completed, carries nothing, is not mid-harvest,
-/// and either has no harvest link or sits on a guard order (some workers, e.g.
-/// Zerg Agrileth, keep a stale harvest target while parked — the guard orders
-/// catch those too).
+/// is standing still, and either has no harvest link or sits on a parked order.
 fn worker_is_idle(u: &bw_dat::structs::Unit) -> bool {
     if u.remaining_build_time != 0 {
         return false;
@@ -39,7 +47,32 @@ fn worker_is_idle(u: &bw_dat::structs::Unit) -> bool {
     if w.carried_resource_count != 0 || w.is_harvesting != 0 {
         return false;
     }
-    w.current_harvest_target.is_null() || u.order == ORDER_GUARD || u.order == ORDER_PLAYER_GUARD
+    // Moving workers are on their way somewhere; only parked workers count.
+    let f = &u.flingy;
+    if f.current_speed != 0 || f.current_speed_x != 0 || f.current_speed_y != 0 {
+        return false;
+    }
+    if w.current_harvest_target.is_null() {
+        return true;
+    }
+    matches!(u.order, ORDER_STOP | ORDER_GUARD | ORDER_PLAYER_GUARD)
+}
+
+/// The local player's idle-worker count (the HUD counter value).
+pub(crate) unsafe fn count_idle(local: u32) -> u32 {
+    let mut n = 0u32;
+    crate::frame::for_each_unit(|u| {
+        if (*u).player as u32 != local {
+            return;
+        }
+        if worker_tier((*u).unit_id).is_none() {
+            return;
+        }
+        if worker_is_idle(&*u) {
+            n += 1;
+        }
+    });
+    n
 }
 
 /// How many units one selection can hold (`SelectionCap`).
@@ -58,7 +91,7 @@ pub(crate) fn install() {
         Some(vk) => {
             KEY_VK.store(vk, Ordering::SeqCst);
             crate::log::log(&format!(
-                "[cosmo-plus] idle workers: hotkey {name} (VK 0x{vk:02X}) selects idle workers"
+                "[cosmo-plus] idle workers: hotkey {name} (VK 0x{vk:02X}) selects one idle worker"
             ));
         }
         None => crate::log::log(&format!(
@@ -75,8 +108,9 @@ pub(crate) unsafe fn local_player() -> Option<u32> {
     Some(f())
 }
 
-/// Called from the draw pass every frame. On the hotkey's rising edge, select every
-/// idle worker through the engine's own selection routine (synced command).
+/// Called from the draw pass every frame. On the hotkey's rising edge, select
+/// **one** idle worker through the engine's own selection routine (synced
+/// command). Each further press selects the next idle worker.
 pub(crate) unsafe fn poll() {
     let vk = KEY_VK.load(Ordering::SeqCst);
     if vk == 0 {
@@ -103,11 +137,9 @@ pub(crate) unsafe fn poll() {
     let Some(local) = local_player() else {
         return;
     };
-    let mut list: [*mut bw_dat::structs::Unit; SELECTION_CAP] =
-        [core::ptr::null_mut(); SELECTION_CAP];
-    let mut n = 0usize;
+    let mut first: *mut bw_dat::structs::Unit = core::ptr::null_mut();
     crate::frame::for_each_unit(|u| {
-        if n >= SELECTION_CAP {
+        if !first.is_null() {
             return;
         }
         if (*u).player as u32 != local {
@@ -119,13 +151,13 @@ pub(crate) unsafe fn poll() {
         if !worker_is_idle(&*u) {
             return;
         }
-        list[n] = u;
-        n += 1;
+        first = u;
     });
-    if n == 0 {
+    if first.is_null() {
         crate::log::log("[cosmo-plus] idle workers: none found");
         return;
     }
-    crate::log::log(&format!("[cosmo-plus] idle workers: selecting {n}"));
-    crate::select::select_units_if_alt_not_held(list.as_ptr(), n as u32, 1, 1);
+    crate::log::log("[cosmo-plus] idle workers: selecting 1");
+    let list: [*mut bw_dat::structs::Unit; SELECTION_CAP] = [first; SELECTION_CAP];
+    crate::select::select_units_if_alt_not_held(list.as_ptr(), 1, 1, 1);
 }

@@ -245,11 +245,52 @@ unsafe extern "stdcall" fn draw_hook(surface: *mut core::ffi::c_void, bounds: *m
     draw_tab_indicator();
     // Rollback bug-capture confirmation (drawn regardless of the overlay switch).
     draw_capture_confirmation();
+    // Idle-worker counter above the minimap (SC2-style; drawn regardless of
+    // the overlay switch, like the tab indicator).
+    draw_idle_counter();
     draw_pass();
 }
 
-/// The Tab subgroup indicator (`Tab g/n`), drawn for ~1.5 s after each Tab press.
-/// Independent of the saturation overlay switch.
+/// The idle-worker counter (`Idle: N`), drawn at the top-left under the game
+/// clock in the small font. Yellow when workers are idle, grey at zero.
+/// Independent of the saturation overlay switch. Fixed game-space position
+/// (same approach as the Tab indicator), so it stays visible at any
+/// resolution or window mode.
+unsafe fn draw_idle_counter() {
+    if crate::frame::frame_count() == 0 {
+        return; // not in a game
+    }
+    let Some(local) = crate::idle_workers::local_player() else {
+        return;
+    };
+    let font = in_game_font();
+    if font.is_null() {
+        return;
+    }
+    let n = crate::idle_workers::count_idle(local);
+    static FIRST_DRAW: std::sync::Once = std::sync::Once::new();
+    FIRST_DRAW.call_once(|| {
+        crate::log::log(&format!("[cosmo-plus] idle counter: first draw n={n}"));
+    });
+    set_font_handle(font);
+    write_draw_text(0, 0, 0x7FFF, 0x7FFF);
+    *(G_PRINT_XY_ALIGNMENT as *mut u8) = 0x11;
+    let mut buf = [0u8; 16];
+    buf.fill(0);
+    let label = format!("Idle: {n}");
+    let len = label.len().min(buf.len());
+    buf[..len].copy_from_slice(&label.as_bytes()[..len]);
+    let (cx, cy) = camera();
+    // Drop shadow for contrast against any terrain, then the text on top.
+    get_color_handle(text_color::BLACK);
+    bw_print_xy(buf.as_ptr(), cx + 5, cy + 25);
+    get_color_handle(if n > 0 { text_color::YELLOW } else { text_color::GREY2 });
+    bw_print_xy(buf.as_ptr(), cx + 4, cy + 24);
+    set_font_handle(core::ptr::null_mut());
+}
+
+/// The Tab subgroup indicator (`Tab 2/3 · Marines`), drawn for ~1.5 s after each Tab
+/// press. Independent of the saturation overlay switch.
 unsafe fn draw_tab_indicator() {
     let Some((active, total)) = crate::tab_cycle::indicator(crate::frame::frame_count()) else {
         return;
@@ -262,13 +303,35 @@ unsafe fn draw_tab_indicator() {
     write_draw_text(0, 0, 0x7FFF, 0x7FFF);
     *(G_PRINT_XY_ALIGNMENT as *mut u8) = 0x11;
     get_color_handle(text_color::WHITE);
-    let mut buf = [0u8; 16];
+    let mut buf = [0u8; 64];
     buf.fill(0);
-    let _ = write!(&mut buf[..], "Tab {active}/{total}");
+    let id = crate::tab_cycle::active_unit_id() as usize;
+    let name = UNIT_NAMES
+        .get(id)
+        .map(|s| s.as_str())
+        .unwrap_or("")
+        .trim();
+    let label = if name.is_empty() {
+        format!("Tab {active}/{total}")
+    } else {
+        // Keep the line short; long unit names are cut off.
+        let mut short = String::with_capacity(28);
+        for c in name.chars() {
+            if short.len() + 6 >= 28 {
+                break;
+            }
+            short.push(c);
+        }
+        format!("Tab {active}/{total} \u{b7} {short}")
+    };
+    let _ = write!(&mut buf[..], "{label}");
     let (cx, cy) = camera();
     bw_print_xy(buf.as_ptr(), cx + 60, cy + 250);
     set_font_handle(core::ptr::null_mut());
 }
+
+/// `mpq/arr/units.txt` names (id = line index), loaded once for the indicator.
+static UNIT_NAMES: Lazy<Vec<String>> = Lazy::new(crate::data::load_unit_names);
 
 /// The last frame captured by the rollback plugin's bug-capture (export poll), so we can
 /// confirm on screen that Ctrl+F11 (or the freeze watchdog) saved a bundle.

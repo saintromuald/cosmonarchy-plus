@@ -251,11 +251,10 @@ unsafe extern "stdcall" fn draw_hook(surface: *mut core::ffi::c_void, bounds: *m
     draw_pass();
 }
 
-/// The idle-worker counter (`Idle: N`), drawn at the top-left under the game
-/// clock in the small font. Yellow when workers are idle, grey at zero.
-/// Independent of the saturation overlay switch. Fixed game-space position
-/// (same approach as the Tab indicator), so it stays visible at any
-/// resolution or window mode.
+/// The idle-worker badge (SC2-style), drawn above the minimap on the mid-left:
+/// the first idle worker's command-card icon plus the yellow count, or the
+/// local race's tier-1 worker icon with a grey 0 when everyone is busy.
+/// Independent of the saturation overlay switch.
 unsafe fn draw_idle_counter() {
     if crate::frame::frame_count() == 0 {
         return; // not in a game
@@ -272,21 +271,62 @@ unsafe fn draw_idle_counter() {
     FIRST_DRAW.call_once(|| {
         crate::log::log(&format!("[cosmo-plus] idle counter: first draw n={n}"));
     });
+
+    // Screen-fixed position: mid-left, above the bottom panel/minimap strip.
+    // The widescreen build relocates the classic UI globals (the raw minimap
+    // rect address no longer holds live values), so the badge uses a fixed
+    // game-space spot with env overrides for tuning.
+    let badge_x = crate::config::env("CM_PLUS_IDLE_BADGE_X")
+        .and_then(|v| v.parse::<i32>().ok())
+        .unwrap_or(16);
+    let badge_y = crate::config::env("CM_PLUS_IDLE_BADGE_Y")
+        .and_then(|v| v.parse::<i32>().ok())
+        .unwrap_or(824);
+    let (cx, cy) = camera();
+    let icon_id = crate::idle_workers::first_idle_icon(local)
+        .unwrap_or_else(|| tier1_worker_icon(local as u8));
+    let icon_x = badge_x + cx;
+    let icon_y = badge_y + cy;
+
     set_font_handle(font);
     write_draw_text(0, 0, 0x7FFF, 0x7FFF);
     *(G_PRINT_XY_ALIGNMENT as *mut u8) = 0x11;
+
     let mut buf = [0u8; 16];
     buf.fill(0);
     let label = format!("Idle: {n}");
     let len = label.len().min(buf.len());
     buf[..len].copy_from_slice(&label.as_bytes()[..len]);
-    let (cx, cy) = camera();
-    // Drop shadow for contrast against any terrain, then the text on top.
+
+    let Some((iw, ih)) = crate::icon::draw_unit_icon(icon_id, icon_x, icon_y) else {
+        // Icons GRP not loaded yet: text-only fallback at the top-left.
+        get_color_handle(if n > 0 { text_color::YELLOW } else { text_color::GREY2 });
+        bw_print_xy(buf.as_ptr(), cx + 4, cy + 24);
+        set_font_handle(core::ptr::null_mut());
+        return;
+    };
+
+    // Drop shadow for contrast, then the count right of the icon.
+    let text_x = icon_x + iw + 8;
+    let text_y = icon_y + (ih - 8) / 2;
     get_color_handle(text_color::BLACK);
-    bw_print_xy(buf.as_ptr(), cx + 5, cy + 25);
+    bw_print_xy(buf.as_ptr(), text_x + 1, text_y + 1);
     get_color_handle(if n > 0 { text_color::YELLOW } else { text_color::GREY2 });
-    bw_print_xy(buf.as_ptr(), cx + 4, cy + 24);
+    bw_print_xy(buf.as_ptr(), text_x, text_y);
     set_font_handle(core::ptr::null_mut());
+}
+
+/// The tier-1 worker unit id for a `RaceId::Enum` value (0 Zerg, 1 Terran,
+/// 2 Protoss, 69 Askosi), matching `saturation::WORKER_TIERS`. Used for the
+/// idle badge when no worker is idle (SC2 shows the race's worker greyed).
+fn tier1_worker_icon(race: u8) -> u32 {
+    let unit_id: u16 = match race {
+        0 => 41,   // Zerg Droleth
+        2 => 64,   // Protoss Scribe
+        69 => 439, // Askosi Pilgrim
+        _ => 7,    // Terran Mason
+    };
+    bw_dat::UnitId(unit_id).icon()
 }
 
 /// The Tab subgroup indicator (`Tab 2/3 · Marines`), drawn for ~1.5 s after each Tab

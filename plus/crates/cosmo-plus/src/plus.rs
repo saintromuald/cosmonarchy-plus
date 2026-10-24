@@ -76,6 +76,8 @@ pub(crate) fn install() {
     // overlay switch — it is polled from the draw hook, so it needs that hook.
     crate::idle_workers::install();
     crate::ultraload::install();
+    // Camera hotkey labels (C1-C8 on the minimap): needs the gptp export.
+    crate::cam_labels::install();
     // Larva picker (F12 by default; see larva_pick.rs). Needs the draw hook and
     // installs its own keyboard hook for the count entry.
     crate::larva_pick::install();

@@ -31,13 +31,13 @@ pub const CESIAN_IDS: &[u16] = &[134, 143, 144, 146, 216, 292, 293, 354, 355];
 /// `Unit.building.nydus_exit` offset (UnitLayout.h `/*0x0D0*/ Unit* nydus_exit`).
 const UNIT_NYDUS_EXIT_OFFSET: usize = 0x0D0;
 /// The minimap rect (left/top/right/bottom, screen px).
-const G_MINIMAP_RECT: usize = 0x0051_2D00;
+pub(crate) const G_MINIMAP_RECT: usize = 0x0051_2D00;
 /// Map width / height in tiles (`Game.map_size` pair, read by the rollback
 /// client's takeover log from the same addresses).
-const MAP_SIZE_X: usize = 0x0057_F1D4;
-const MAP_SIZE_Y: usize = 0x0057_F1D6;
+pub(crate) const MAP_SIZE_X: usize = 0x0057_F1D4;
+pub(crate) const MAP_SIZE_Y: usize = 0x0057_F1D6;
 /// World pixels per tile.
-const PX_PER_TILE: i32 = 32;
+pub(crate) const PX_PER_TILE: i32 = 32;
 
 /// One numbered nydus pair: both members at their world positions.
 struct NydusPair {

@@ -250,7 +250,34 @@ unsafe extern "stdcall" fn draw_hook(surface: *mut core::ffi::c_void, bounds: *m
     // Idle-worker counter above the minimap (SC2-style; drawn regardless of
     // the overlay switch, like the tab indicator).
     draw_idle_counter();
+    // Nydus numbering + C1-C8 camera labels: world annotations that must be
+    // visible whenever a game runs, regardless of the saturation overlay
+    // switch or of whether the local player has any labelled nodes left.
+    draw_world_annotations();
     draw_pass();
+}
+
+/// In-world / on-minimap annotations that are independent of the saturation
+/// overlay: nydus canal/exit numbers and the F1-F8 camera labels. Drawn every
+/// frame from the draw hook (never gated by the overlay switch or by an empty
+/// node list — a base whose patches are mined out still shows its Cesiant
+/// numbers).
+unsafe fn draw_world_annotations() {
+    if crate::frame::frame_count() == 0 {
+        return; // not in a game
+    }
+    let font = in_game_font();
+    if font.is_null() {
+        return;
+    }
+    set_font_handle(font);
+    write_draw_text(0, 0, 0x7FFF, 0x7FFF);
+    *(G_PRINT_XY_ALIGNMENT as *mut u8) = 0x11;
+    let mut buf = [0u8; 16];
+    crate::nydus::draw_world(&mut buf);
+    crate::nydus::draw_minimap(&mut buf);
+    crate::cam_labels::draw_minimap(&mut buf);
+    set_font_handle(core::ptr::null_mut());
 }
 
 /// The idle-worker badge (SC2-style), drawn above the minimap on the mid-left:
@@ -490,11 +517,6 @@ unsafe fn draw_pass() {
         }
         draw_depot(d, &mut buf);
     }
-    // Nydus numbering: canal/exit pairs, in-world and on the minimap.
-    crate::nydus::draw_world(&mut buf);
-    crate::nydus::draw_minimap(&mut buf);
-    // Camera hotkey labels (C1-C8) on the minimap.
-    crate::cam_labels::draw_minimap(&mut buf);
     set_font_handle(core::ptr::null_mut());
 }
 

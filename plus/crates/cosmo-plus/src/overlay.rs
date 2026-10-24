@@ -65,6 +65,34 @@ static OPT_CAP: AtomicUsize = AtomicUsize::new(usize::MAX);
 /// Whether to write a periodic per-node dump to the log (from `CM_PLUS_SATURATION_LOG=1`).
 static LOG_DUMP: AtomicBool = AtomicBool::new(false);
 
+// ---------------------------------------------------------------------------
+// "Changes vs OG" tip panel (Pause/Break by default; CM_PLUS_CHANGES_KEY).
+// ---------------------------------------------------------------------------
+/// Line-by-line, player-facing differences from stock Cosmonarchy. Keep these
+/// short: they are drawn with the in-game font, one line each.
+const CHANGES_LINES: &[&str] = &[
+    "Workers: 3 per mineral patch and 3 per gas node (flat, no diminishing)",
+    "Gas: tier 1-3 cost less and build faster",
+    "Advanced workers: +25 gas, much shorter build times",
+    "Ultraload: +50% move speed, 20-tile depot radius",
+    "Zoom: player floor 100% instead of the default 200%",
+    "Smart Tab: cycles the active subgroup (units and buildings)",
+    "Camera pan: CapsLock + WASD or arrow keys",
+    "Idle workers: F9 selects the next idle worker",
+    "Larva pick: F12, type a count, Enter",
+    "Saturation counts above your own town halls and gas",
+    "Lobby: Anti Meta (46) and Draft (47) game types",
+    "Netcode: rollback host/join (armed by the launcher)",
+    "Crash: Ctrl+F11 saves a bug bundle for reporting",
+];
+const CHANGES_DEFAULT_KEY: u16 = 0x13; // VK_PAUSE
+const CHANGES_HINT_FRAMES: u32 = 24 * 20; // ~20 s at 24 logic frames/s
+static CHANGES_VISIBLE: AtomicBool = AtomicBool::new(false);
+static CHANGES_KEY: AtomicU32 = AtomicU32::new(CHANGES_DEFAULT_KEY as u32);
+static CHANGES_DOWN: AtomicBool = AtomicBool::new(false);
+static CHANGES_HINT_FROM: AtomicU32 = AtomicU32::new(0);
+static CHANGES_LAST_FRAME: AtomicU32 = AtomicU32::new(u32::MAX);
+
 /// One resource node's display state.
 struct NodeState {
     x: i32,
@@ -176,6 +204,8 @@ pub(crate) fn install() {
             "[cosmo-plus] overlay: hooked game draw proc (old 0x{old:08X} -> new 0x{my:08X}, patch={r})"
         ));
     }
+
+    install_changes();
 }
 
 /// Resolve the master switch: `CM_PLUS_SATURATION` env override wins, otherwise
@@ -255,6 +285,8 @@ unsafe extern "stdcall" fn draw_hook(surface: *mut core::ffi::c_void, bounds: *m
     // switch or of whether the local player has any labelled nodes left.
     draw_world_annotations();
     draw_pass();
+    poll_changes();
+    draw_changes();
 }
 
 /// In-world / on-minimap annotations that are independent of the saturation
@@ -744,6 +776,90 @@ unsafe fn draw_depot(d: &DepotState, buf: &mut [u8; 16]) {
 // Low-level 1.16.1 text primitives (custom register ABI; wrapped with PUSHAD/POPAD the
 // same way `bwhelper.h` does, so no register is clobbered).
 // ---------------------------------------------------------------------------
+
+/// Resolve the changes-panel hotkey (one-time, at install).
+fn install_changes() {
+    let vk = crate::config::env("CM_PLUS_CHANGES_KEY")
+        .as_deref()
+        .and_then(cosmo_plus_core::hotkeys::parse_key)
+        .unwrap_or(CHANGES_DEFAULT_KEY);
+    CHANGES_KEY.store(vk as u32, Ordering::SeqCst);
+    crate::log::log(&format!(
+        "[cosmo-plus] changes panel: VK 0x{vk:02X} toggles changes vs OG"
+    ));
+}
+
+/// Poll the panel hotkey on its rising edge (draw pass = view-local input).
+pub(crate) unsafe fn poll_changes() {
+    if crate::frame::frame_count() == 0 {
+        return;
+    }
+    let vk = CHANGES_KEY.load(Ordering::SeqCst);
+    if vk == 0 {
+        return;
+    }
+    let down = (windows_sys::Win32::UI::Input::KeyboardAndMouse::GetAsyncKeyState(vk as i32)
+        as u16
+        & 0x8000)
+        != 0;
+    let was = CHANGES_DOWN.swap(down, Ordering::SeqCst);
+    if down && !was {
+        let now = !CHANGES_VISIBLE.load(Ordering::SeqCst);
+        CHANGES_VISIBLE.store(now, Ordering::SeqCst);
+        crate::log::log(&format!(
+            "[cosmo-plus] changes panel: {}",
+            if now { "shown" } else { "hidden" }
+        ));
+    }
+}
+
+/// Draw the changes panel, or a short "how to open it" hint for the first ~20 s
+/// of each game. Independent of the saturation overlay switch.
+pub(crate) unsafe fn draw_changes() {
+    let frame = crate::frame::frame_count();
+    if frame == 0 {
+        return;
+    }
+    let last = CHANGES_LAST_FRAME.swap(frame, Ordering::SeqCst);
+    if frame < last {
+        CHANGES_HINT_FROM.store(frame, Ordering::SeqCst); // new game
+    }
+    if CHANGES_HINT_FROM.load(Ordering::SeqCst) == 0 {
+        CHANGES_HINT_FROM.store(frame, Ordering::SeqCst);
+    }
+
+    let visible = CHANGES_VISIBLE.load(Ordering::SeqCst);
+    let hint = !visible
+        && frame.saturating_sub(CHANGES_HINT_FROM.load(Ordering::SeqCst)) < CHANGES_HINT_FRAMES;
+    if !visible && !hint {
+        return;
+    }
+
+    let font = in_game_font();
+    if font.is_null() {
+        return;
+    }
+    set_font_handle(font);
+    write_draw_text(0, 0, 0x7FFF, 0x7FFF);
+    *(G_PRINT_XY_ALIGNMENT as *mut u8) = 0x11;
+    let (cx, cy) = camera();
+
+    if visible {
+        get_color_handle(text_color::YELLOW);
+        let title = padded("COSMONARCHY PLUS - CHANGES VS OG (Pause/Break closes)");
+        bw_print_xy(title.as_ptr(), cx + 60, cy + 24);
+        get_color_handle(text_color::WHITE);
+        for (i, line) in CHANGES_LINES.iter().enumerate() {
+            let buf = padded(line);
+            bw_print_xy(buf.as_ptr(), cx + 70, cy + 48 + i as i32 * 14);
+        }
+    } else {
+        get_color_handle(text_color::YELLOW);
+        let buf = padded("Cosmonarchy Plus: Pause/Break shows changes vs OG");
+        bw_print_xy(buf.as_ptr(), cx + 60, cy + 24);
+    }
+    set_font_handle(core::ptr::null_mut());
+}
 
 /// Draw a small panel of text lines fixed to the screen (draft UI). Screen space is
 /// expressed as camera-relative world coordinates, so the panel follows the camera.

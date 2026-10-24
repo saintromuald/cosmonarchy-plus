@@ -53,6 +53,8 @@ pub fn parse_key(name: &str) -> Option<u16> {
         "INSERT" => 0x2D,
         "PAGEUP" => 0x21,
         "PAGEDOWN" => 0x22,
+        "PAUSE" | "BREAK" => 0x13,
+        "SCROLLLOCK" | "SCROLL" => 0x91,
         _ => return None,
     })
 }
@@ -72,6 +74,8 @@ mod tests {
         assert_eq!(parse_key("SPACE"), Some(0x20));
         assert_eq!(parse_key("Home"), Some(0x24));
         assert_eq!(parse_key("0x7A"), Some(0x7A));
+        assert_eq!(parse_key("Pause"), Some(0x13));
+        assert_eq!(parse_key("scrolllock"), Some(0x91));
         assert_eq!(parse_key(""), None);
         assert_eq!(parse_key("F13"), None);
         assert_eq!(parse_key("CTRL"), None);

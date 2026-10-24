@@ -75,6 +75,28 @@ pub(crate) unsafe fn count_idle(local: u32) -> u32 {
     n
 }
 
+/// The command-card icon id of the first idle worker, or None when none are
+/// idle. Used for the SC2-style HUD badge.
+pub(crate) unsafe fn first_idle_icon(local: u32) -> Option<u32> {
+    let mut icon: Option<u32> = None;
+    crate::frame::for_each_unit(|u| {
+        if icon.is_some() {
+            return;
+        }
+        if (*u).player as u32 != local {
+            return;
+        }
+        if worker_tier((*u).unit_id).is_none() {
+            return;
+        }
+        if !worker_is_idle(&*u) {
+            return;
+        }
+        icon = Some(bw_dat::UnitId((*u).unit_id).icon());
+    });
+    icon
+}
+
 /// How many units one selection can hold (`SelectionCap`).
 const SELECTION_CAP: usize = 12;
 

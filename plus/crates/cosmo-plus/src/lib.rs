@@ -13,6 +13,7 @@ mod crash;
 mod data;
 mod draft;
 mod frame;
+mod icon;
 mod idle_workers;
 mod larva_pick;
 mod log;

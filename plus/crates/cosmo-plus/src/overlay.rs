@@ -13,7 +13,7 @@
 //! magnified correctly by `scale_world` with no zoom math of our own.
 
 use std::io::Write;
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicUsize, Ordering};
 use std::sync::Mutex;
 
 use once_cell::sync::Lazy;
@@ -243,6 +243,8 @@ unsafe extern "stdcall" fn draw_hook(surface: *mut core::ffi::c_void, bounds: *m
     crate::tab_cycle::poll();
     // Tab indicator (drawn regardless of the saturation overlay switch).
     draw_tab_indicator();
+    // Rollback bug-capture confirmation (drawn regardless of the overlay switch).
+    draw_capture_confirmation();
     draw_pass();
 }
 
@@ -265,6 +267,68 @@ unsafe fn draw_tab_indicator() {
     let _ = write!(&mut buf[..], "Tab {active}/{total}");
     let (cx, cy) = camera();
     bw_print_xy(buf.as_ptr(), cx + 60, cy + 250);
+    set_font_handle(core::ptr::null_mut());
+}
+
+/// The last frame captured by the rollback plugin's bug-capture (export poll), so we can
+/// confirm on screen that Ctrl+F11 (or the freeze watchdog) saved a bundle.
+static LAST_SEEN_CAPTURE: AtomicU32 = AtomicU32::new(0);
+static CAPTURE_SHOW_UNTIL: AtomicU32 = AtomicU32::new(0);
+
+fn rollback_last_capture() -> u32 {
+    use windows_sys::Win32::System::LibraryLoader::{GetModuleHandleA, GetProcAddress};
+    use std::sync::atomic::AtomicUsize;
+    static FN: AtomicUsize = AtomicUsize::new(0);
+    let mut ptr = FN.load(Ordering::SeqCst);
+    if ptr == 0 {
+        unsafe {
+            let module = GetModuleHandleA(c"zz-cosmo-rollback.qdp".as_ptr() as *const u8);
+            if module as usize != 0 {
+                match GetProcAddress(
+                    module,
+                    c"cosmo_rollback_last_capture".as_ptr() as *const u8,
+                ) {
+                    Some(f) => {
+                        ptr = f as usize;
+                        FN.store(ptr, Ordering::SeqCst);
+                    }
+                    None => ptr = 0,
+                }
+            }
+        }
+    }
+    if ptr == 0 {
+        return 0;
+    }
+    unsafe { core::mem::transmute::<usize, unsafe extern "system" fn() -> u32>(ptr)() }
+}
+
+unsafe fn draw_capture_confirmation() {
+    let frame = crate::frame::frame_count();
+    if frame == 0 {
+        return;
+    }
+    let last = rollback_last_capture();
+    if last != 0 && last != LAST_SEEN_CAPTURE.load(Ordering::SeqCst) {
+        LAST_SEEN_CAPTURE.store(last, Ordering::SeqCst);
+        CAPTURE_SHOW_UNTIL.store(frame.saturating_add(72), Ordering::SeqCst); // ~3 s
+    }
+    if frame > CAPTURE_SHOW_UNTIL.load(Ordering::SeqCst) {
+        return;
+    }
+    let font = in_game_font();
+    if font.is_null() {
+        return;
+    }
+    set_font_handle(font);
+    write_draw_text(0, 0, 0x7FFF, 0x7FFF);
+    *(G_PRINT_XY_ALIGNMENT as *mut u8) = 0x11;
+    get_color_handle(text_color::YELLOW);
+    let mut buf = [0u8; 32];
+    buf.fill(0);
+    let _ = write!(&mut buf[..], "BUG SAVED f{}", last);
+    let (cx, cy) = camera();
+    bw_print_xy(buf.as_ptr(), cx + 60, cy + 264);
     set_font_handle(core::ptr::null_mut());
 }
 

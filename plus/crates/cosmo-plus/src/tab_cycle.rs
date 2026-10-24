@@ -9,19 +9,18 @@
 //!     hotkeys, while plain orders (move/attack/stop) still go to every selected unit;
 //!   * selecting fresh resets to the first subgroup.
 //!
-//! Brood War has no subgroup concept, so this emulates it by **rotating the client
-//! selection** so the active subgroup's units come first: BW lists the first-selected
-//! unit type's buttons first on the command card and gives them hotkey priority, so
-//! after each Tab the active group's abilities (spells, production, morphs) are the
-//! ones under the player's fingers. The selection content never changes — every unit
-//! stays selected, so movement/attack orders still apply to the whole group, exactly
-//! like SC2. The wireframe reorders to show the active subgroup first, the visible
-//! "highlight".
+//! Brood War has no subgroup concept, so this emulates it **without touching the
+//! selection**: the selection never changes; every unit stays selected (orders still
+//! apply to the whole group). The active subgroup is a viewer-local pointer, and the
+//! engine's UI is aimed at it by writing the active unit into
+//! `g_active_portrait_unit` (the global the wireframe, stats panel and command
+//! buttons all read) from the draw pass — the visible "highlight" that moves from
+//! group to group with each Tab, so spells can be cast group by group.
 //!
-//! The rotation is **client-side only** (`send_command = 0` into the engine's own
-//! selection routine), viewer-local and netcode-safe, like the idle-worker/larva
-//! selections. Tab stays inert when the selection has a single unit type, when chat
-//! or a modal dialog is open, or outside a game — the key is never swallowed.
+//! The Tab key is **swallowed** by a thread keyboard hook (installed after gptp's,
+//! so it runs first) while in a game — stock Brood War binds Tab to hiding the
+//! terrain, which this replaces. Outside chat and modal dialogs the key is never
+//! swallowed. Tab stays inert when the selection has a single unit type.
 //!
 //! Cosmonarchy extends the selection to `SelectionLimit` = 240 units and moves the
 //! client selection table out of the exe into `ccmu_extender` (inside `gptp.qdp`).
@@ -39,10 +38,12 @@ use once_cell::sync::Lazy;
 
 use bw_dat::structs::Unit;
 
+use windows_sys::Win32::System::Threading::GetCurrentThreadId;
 use windows_sys::Win32::UI::Input::KeyboardAndMouse::GetAsyncKeyState;
+use windows_sys::Win32::UI::WindowsAndMessaging::{SetWindowsHookExW, WH_KEYBOARD};
 
 use cosmo_plus_core::hotkeys::{parse_key, DEFAULT_TAB_KEY};
-use cosmo_plus_core::subgroups::subgroup_rotation;
+use cosmo_plus_core::subgroups::subgroup_runs;
 
 /// `g_client_selection_count` (u8) — maintained by `update_selected_unit_data`.
 const CLIENT_SELECTION_COUNT: usize = 0x0059723D;
@@ -50,6 +51,10 @@ const CLIENT_SELECTION_COUNT: usize = 0x0059723D;
 const CHAT_MESSAGE_TYPE: usize = 0x0068C144;
 /// `g_popup_dialog` (`BinDlg**`) — nonzero while a modal game dialog is up.
 const POPUP_DIALOG: usize = 0x006D5BF4;
+/// `g_active_portrait_unit` (Unit**) — the unit the engine's wireframe, stats
+/// panel and command buttons display. Written from the draw pass to highlight the
+/// active subgroup.
+const G_ACTIVE_PORTRAIT_UNIT: usize = 0x00597248;
 
 /// Immediates the selection extender rewrites with the runtime address of
 /// `ccmu_extender.new_client_selection_group` and of its one-past-end slot.
@@ -81,22 +86,26 @@ static RESOLVED: AtomicBool = AtomicBool::new(false);
 /// Forward cycle key (default Tab) and optional separate backward key (0 = none).
 static FWD_VK: AtomicU16 = AtomicU16::new(0);
 static PREV_VK: AtomicU16 = AtomicU16::new(0);
-/// Rising-edge state: bit 14 = forward key held last poll, bit 15 = prev key.
-static KEY_EDGE: AtomicU32 = AtomicU32::new(0);
+
+/// The keyboard hook handle, kept for the process lifetime.
+static HOOK: Mutex<Option<isize>> = Mutex::new(None);
+/// Key events swallowed by the hook, queued for the draw pass: 1 = forward,
+/// 2 = backward, 0 = none.
+static QUEUED: AtomicU32 = AtomicU32::new(0);
 
 /// Game frame until which the indicator stays visible.
 static SHOW_UNTIL_FRAME: AtomicU32 = AtomicU32::new(0);
 
-/// Selection identity and rotation state. `base` is the selection (as raw Unit*
-/// pointers) at the last reset; `written` is what the last rotation wrote to the
-/// engine. A selection that matches neither is a fresh one and resets the cycle.
+/// Selection identity and the active-subgroup state. `base` is the selection (as
+/// raw Unit* pointers) that the current cycle belongs to; a selection that does not
+/// match it is a fresh one and resets the cycle.
 struct Cycle {
     active: u32,
     groups: u32,
     count: usize,
     active_id: u16,
+    active_ptr: u32,
     base: [u32; EXTENDED_LIMIT],
-    written: [u32; EXTENDED_LIMIT],
 }
 
 static CYCLE: Lazy<Mutex<Cycle>> = Lazy::new(|| {
@@ -105,8 +114,8 @@ static CYCLE: Lazy<Mutex<Cycle>> = Lazy::new(|| {
         groups: 0,
         count: 0,
         active_id: 0,
+        active_ptr: 0,
         base: [0; EXTENDED_LIMIT],
-        written: [0; EXTENDED_LIMIT],
     })
 });
 
@@ -121,8 +130,9 @@ pub(crate) fn install() {
         Some(vk) => {
             FWD_VK.store(vk, Ordering::SeqCst);
             crate::log::log(&format!(
-                "[cosmo-plus] tab cycle: {fwd_name} (VK 0x{vk:02X}) cycles to the next \
-                 subgroup of a mixed selection; Shift+{fwd_name} cycles backward (SC2 Tab)"
+                "[cosmo-plus] tab cycle: {fwd_name} (VK 0x{vk:02X}) highlights the next \
+                 subgroup; Shift+{fwd_name} goes back (SC2 Tab; the terrain toggle is \
+                 replaced)"
             ));
         }
         None => {
@@ -138,7 +148,8 @@ pub(crate) fn install() {
             Some(vk) if vk != FWD_VK.load(Ordering::SeqCst) => {
                 PREV_VK.store(vk, Ordering::SeqCst);
                 crate::log::log(&format!(
-                    "[cosmo-plus] tab cycle: {prev_name} (VK 0x{vk:02X}) cycles backward"
+                    "[cosmo-plus] tab cycle: {prev_name} (VK 0x{vk:02X}) highlights the \
+                     previous subgroup"
                 ));
             }
             Some(_) => crate::log::log(
@@ -151,12 +162,84 @@ pub(crate) fn install() {
             )),
         }
     }
+    install_hook();
     // Resolve the selection table now: `gptp.qdp` (the mod) loads before this plugin
     // and has already rewritten the anchor immediates, so the extended table resolves
     // during the menu boot and is logged for the headless probe.
     unsafe {
         resolve_selection();
     }
+}
+
+fn install_hook() {
+    unsafe {
+        let h = SetWindowsHookExW(
+            WH_KEYBOARD,
+            Some(keyboard_proc),
+            std::ptr::null_mut(),
+            GetCurrentThreadId(),
+        );
+        if h.is_null() {
+            crate::log::log(
+                "[cosmo-plus] tab cycle: SetWindowsHookEx failed; the terrain toggle \
+                 will stay bound to Tab",
+            );
+            return;
+        }
+        crate::log::log(
+            "[cosmo-plus] tab cycle: keyboard hook installed (Tab is swallowed in-game)",
+        );
+        *HOOK.lock().unwrap() = Some(h as isize);
+    }
+}
+
+fn call_next(code: i32, wparam: usize, lparam: isize) -> isize {
+    use windows_sys::Win32::UI::WindowsAndMessaging::CallNextHookEx;
+    unsafe {
+        let hook = *HOOK.lock().unwrap();
+        match hook {
+            Some(h) => CallNextHookEx(h as _, code, wparam, lparam),
+            None => 0,
+        }
+    }
+}
+
+/// WH_KEYBOARD hook: runs ahead of gptp's own hook. Swallows Tab (and the
+/// configured backward key) while a game is running, so the stock "hide terrain"
+/// binding never fires — the press is queued for the draw pass instead. Chat and
+/// modal dialogs are never interfered with.
+unsafe extern "system" fn keyboard_proc(code: i32, wparam: usize, lparam: isize) -> isize {
+    if code < 0 {
+        return call_next(code, wparam, lparam);
+    }
+    let key = wparam as u32;
+    let down = lparam as u32 & (1 << 31) == 0; // bit 31 set = key-up
+    if !down {
+        return call_next(code, wparam, lparam);
+    }
+    // Never interfere outside a running game.
+    if crate::frame::frame_count() == 0 {
+        return call_next(code, wparam, lparam);
+    }
+    // Never while chat or a modal dialog is open.
+    let chat = std::ptr::read(CHAT_MESSAGE_TYPE as *const *const u8);
+    if !chat.is_null() && std::ptr::read(chat) != 0 {
+        return call_next(code, wparam, lparam);
+    }
+    if std::ptr::read(POPUP_DIALOG as *const usize) != 0 {
+        return call_next(code, wparam, lparam);
+    }
+
+    let fwd_vk = FWD_VK.load(Ordering::SeqCst);
+    let prev_vk = PREV_VK.load(Ordering::SeqCst);
+    let is_fwd = fwd_vk != 0 && key == fwd_vk as u32;
+    let is_prev = (prev_vk != 0 && key == prev_vk as u32)
+        || (is_fwd && (GetAsyncKeyState(VK_SHIFT) as u16 & 0x8000) != 0);
+    if is_fwd || is_prev {
+        QUEUED.store(if is_prev { 2 } else { 1 }, Ordering::SeqCst);
+        return 1; // swallow: no terrain toggle, ever
+    }
+    call_next(code, wparam, lparam)
 }
 
 /// Resolve the client selection table at runtime. The extender rewrites two
@@ -231,7 +314,7 @@ unsafe fn read_selection() -> Option<(Vec<u16>, Vec<u32>)> {
 /// `CM_PLUS_TAB_SELFTEST=1`: build a synthetic mixed selection from the local
 /// player's units (up to 24, in unit-table order — workers and buildings both, so
 /// the list has 2+ subgroups whenever the player owns both) and feed it through the
-/// normal rotation path. Diagnostic only; exists so the rotation can be exercised
+/// normal advance path. Diagnostic only; exists so the cycle can be exercised
 /// headlessly without a naturally mixed selection on the map.
 unsafe fn selftest_selection() -> Option<(Vec<u16>, Vec<u32>)> {
     let Some(local) = crate::idle_workers::local_player() else {
@@ -261,56 +344,19 @@ unsafe fn selftest_selection() -> Option<(Vec<u16>, Vec<u32>)> {
     Some((ids, ptrs))
 }
 
-/// Called from the draw pass each frame (like `idle_workers::poll`).
+/// Called from the draw pass each frame (like `idle_workers::poll`). Consumes the
+/// key presses queued by the keyboard hook and moves the active-subgroup highlight.
+/// The selection itself is never touched.
 pub(crate) unsafe fn poll() {
     let frame = crate::frame::frame_count();
     if frame == 0 {
         return;
     }
-    let fwd_vk = FWD_VK.load(Ordering::SeqCst);
-    if fwd_vk == 0 {
+    let queued = QUEUED.swap(0, Ordering::SeqCst);
+    if queued == 0 {
         return;
     }
-    // Never react while chat or a modal dialog is open (Tab must stay a plain key
-    // there), mirroring the mod's own `handle_key_event` guard.
-    let chat = std::ptr::read(CHAT_MESSAGE_TYPE as *const *const u8);
-    if !chat.is_null() && std::ptr::read(chat) != 0 {
-        return;
-    }
-    if std::ptr::read(POPUP_DIALOG as *const usize) != 0 {
-        return;
-    }
-
-    let prev_vk = PREV_VK.load(Ordering::SeqCst);
-    let fwd_down = (GetAsyncKeyState(fwd_vk as i32) as u16 & 0x8000) != 0;
-    let prev_down =
-        prev_vk != 0 && (GetAsyncKeyState(prev_vk as i32) as u16 & 0x8000) != 0;
-
-    let mut edge = KEY_EDGE.load(Ordering::SeqCst);
-    let fwd_was = edge & (1 << 14) != 0;
-    let prev_was = edge & (1 << 15) != 0;
-    edge &= !(1 << 14 | 1 << 15);
-    if fwd_down {
-        edge |= 1 << 14;
-    }
-    if prev_down {
-        edge |= 1 << 15;
-    }
-    KEY_EDGE.store(edge, Ordering::SeqCst);
-
-    let fwd_press = fwd_down && !fwd_was;
-    let prev_press = prev_down && !prev_was;
-    if !(fwd_press || prev_press) {
-        return;
-    }
-    // SC2: Tab forward, Shift+Tab backward.
-    let dir: i32 = if prev_press {
-        -1
-    } else if (GetAsyncKeyState(VK_SHIFT) as u16 & 0x8000) != 0 {
-        -1
-    } else {
-        1
-    };
+    let dir: i32 = if queued == 2 { -1 } else { 1 };
 
     let selftest = crate::config::env_flag("CM_PLUS_TAB_SELFTEST");
     let picked = if selftest {
@@ -327,55 +373,61 @@ pub(crate) unsafe fn poll() {
     }
 
     let mut cycle = CYCLE.lock().unwrap();
-    // Fresh selection (anything that is not the result of our own last rotation)
-    // resets the cycle to its first subgroup, like re-selecting in SC2.
-    let is_our_rotation = cycle.count == count && cycle.written[..count] == ptrs[..];
-    if !is_our_rotation {
+    // Fresh selection (different from the one the current cycle belongs to)
+    // resets to the first subgroup, like re-selecting in SC2.
+    let same_selection = cycle.count == count && cycle.base[..count] == ptrs[..];
+    if !same_selection {
         cycle.active = 0;
+        cycle.groups = 0;
         cycle.count = count;
         cycle.base[..count].copy_from_slice(&ptrs);
     }
-    if crate::config::env_flag("CM_PLUS_TAB_DEBUG") {
-        crate::log::log(&format!(
-            "[cosmo-plus] tab cycle debug: press dir={dir:+} count={count} ids={:?} \
-             base={} our_rotation={is_our_rotation}",
-            &ids[..count.min(12)],
-            cycle.count,
-        ));
-    }
-    let Some(rotation) = subgroup_rotation(&ids, cycle.active, dir) else {
+
+    let runs = subgroup_runs(&ids);
+    if runs.len() < 2 {
         cycle.groups = 1;
         if crate::config::env_flag("CM_PLUS_TAB_DEBUG") {
             crate::log::log("[cosmo-plus] tab cycle debug: single subgroup, Tab inert");
         }
         return; // single-type selection: Tab stays inert
-    };
-
-    // Apply the rotated order through the engine's own selection routine
-    // (client-side only: silent, no synced command).
-    let mut rotated: [*mut Unit; EXTENDED_LIMIT] =
-        [core::ptr::null_mut(); EXTENDED_LIMIT];
-    for (i, &idx) in rotation.order.iter().enumerate() {
-        rotated[i] = ptrs[idx as usize] as *mut Unit;
     }
-    crate::select::select_units_if_alt_not_held(rotated.as_ptr(), count as u32, 0, 0);
-
-    for (i, &idx) in rotation.order.iter().enumerate() {
-        cycle.written[i] = ptrs[idx as usize];
+    if crate::config::env_flag("CM_PLUS_TAB_DEBUG") {
+        crate::log::log(&format!(
+            "[cosmo-plus] tab cycle debug: press dir={dir:+} count={count} ids={:?}",
+            &ids[..count.min(12)],
+        ));
     }
-    cycle.active = rotation.active;
-    cycle.groups = rotation.groups;
-    cycle.active_id = rotation.active_unit_id;
+
+    let groups = runs.len() as u32;
+    let next = (cycle.active as i32 + dir).rem_euclid(groups as i32) as u32;
+    let run = &runs[next as usize];
+    cycle.active = next;
+    cycle.groups = groups;
+    cycle.active_id = run.unit_id;
+    cycle.active_ptr = ptrs[run.start];
     drop(cycle);
 
     SHOW_UNTIL_FRAME.store(frame.saturating_add(INDICATOR_FRAMES), Ordering::SeqCst);
     crate::log::log(&format!(
         "[cosmo-plus] tab cycle: active subgroup {}/{} ({} units, id {})",
-        rotation.active + 1,
-        rotation.groups,
+        next + 1,
+        groups,
         count,
-        rotation.active_unit_id
+        run.unit_id
     ));
+}
+
+/// Called from the draw pass every frame (after `poll`): while a cycle is active,
+/// aim the engine's UI at the active subgroup's unit. The engine re-derives the
+/// displayed unit from `selection[0]` each frame, so this runs in the draw pass —
+/// after the simulation, before the UI renders — and it is the visible highlight
+/// (wireframe, stats panel and command buttons all read `g_active_portrait_unit`).
+pub(crate) unsafe fn apply_display() {
+    let cycle = CYCLE.lock().unwrap();
+    if cycle.groups < 2 || cycle.active_ptr == 0 {
+        return;
+    }
+    std::ptr::write(G_ACTIVE_PORTRAIT_UNIT as *mut u32, cycle.active_ptr);
 }
 
 /// Indicator state for the overlay: `Some((active, total))` while the Tab indicator

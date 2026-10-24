@@ -239,8 +239,10 @@ unsafe extern "stdcall" fn draw_hook(surface: *mut core::ffi::c_void, bounds: *m
     // Larva picker: fires the selection on a confirmed count, then draws its entry UI.
     crate::larva_pick::poll();
     crate::larva_pick::draw();
-    // Smart Tab: rotate the active selection subgroup on a fresh Tab press.
+    // Smart Tab: rotate the active subgroup highlight on a fresh Tab press
+    // (the selection itself is never touched).
     crate::tab_cycle::poll();
+    crate::tab_cycle::apply_display();
     // Tab indicator (drawn regardless of the saturation overlay switch).
     draw_tab_indicator();
     // Rollback bug-capture confirmation (drawn regardless of the overlay switch).

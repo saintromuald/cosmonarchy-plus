@@ -922,19 +922,75 @@ unsafe extern "fastcall" fn changes_menu_interact(
     0
 }
 
-/// Runs every draw frame: when the F10 menu is open, relabel its Help control
-/// and take over its click. Cheap when no popup exists.
+/// True when [ptr, ptr+len) is committed, readable memory (VirtualQuery).
+fn readable(ptr: *const u8, len: usize) -> bool {
+    use windows_sys::Win32::System::Memory::{
+        VirtualQuery, MEMORY_BASIC_INFORMATION, MEM_COMMIT, PAGE_GUARD, PAGE_NOACCESS,
+    };
+    if ptr.is_null() {
+        return false;
+    }
+    let mut mbi: MEMORY_BASIC_INFORMATION = unsafe { core::mem::zeroed() };
+    let queried = unsafe {
+        VirtualQuery(
+            ptr as *const core::ffi::c_void,
+            &mut mbi,
+            core::mem::size_of::<MEMORY_BASIC_INFORMATION>(),
+        )
+    };
+    if queried == 0 || mbi.State != MEM_COMMIT || mbi.Protect & (PAGE_NOACCESS | PAGE_GUARD) != 0 {
+        return false;
+    }
+    let region_end = mbi.BaseAddress as usize + mbi.RegionSize;
+    region_end >= ptr as usize + len
+}
+
+/// Bounded, guard-checked C string read.
+fn read_cstr(ptr: *const u8, max: usize) -> Option<Vec<u8>> {
+    if !readable(ptr, 1) {
+        return None;
+    }
+    let mut out = Vec::with_capacity(max.min(64));
+    for i in 0..max {
+        if !readable(unsafe { ptr.add(i) }, 1) {
+            return None;
+        }
+        let b = unsafe { *ptr.add(i) };
+        if b == 0 {
+            return Some(out);
+        }
+        out.push(b);
+    }
+    None
+}
+
+/// Runs every draw frame: when the in-game F10 menu is open, relabel its Help
+/// control and take over its click. Outside a game (`frame_count == 0`) there is
+/// no game menu; every pointer is validated before it is read, and the dialog
+/// must look like the game menu (title contains "game" and it has a Help
+/// control), so popups from other screens are never touched.
 pub(crate) unsafe fn patch_game_menu() {
-    let root = *(G_POPUP_DIALOG as *const *mut BinDlg);
-    if root.is_null() {
+    if crate::frame::frame_count() == 0 {
         return;
     }
+    let root = *(G_POPUP_DIALOG as *const *mut BinDlg);
+    if !readable(root as *const u8, core::mem::size_of::<BinDlg>()) {
+        return;
+    }
+    let Some(title) = read_cstr((*root).text, 64) else {
+        return;
+    };
+    if !title.to_ascii_lowercase().windows(4).any(|w| w == b"game") {
+        return;
+    }
+
     let mut dlg = root;
     let mut guard = 0;
-    while !dlg.is_null() && guard < 64 {
-        let text = (*dlg).text;
-        if !text.is_null() {
-            let bytes = core::ffi::CStr::from_ptr(text as *const core::ffi::c_char).to_bytes();
+    while guard < 64 {
+        if !readable(dlg as *const u8, core::mem::size_of::<BinDlg>()) {
+            return;
+        }
+        if let Some(bytes) = read_cstr((*dlg).text, 64) {
             let lower = bytes.to_ascii_lowercase();
             if lower.windows(4).any(|w| w == b"help") {
                 if (*dlg).text != MENU_TEXT.as_ptr() {
@@ -947,7 +1003,11 @@ pub(crate) unsafe fn patch_game_menu() {
                 return;
             }
         }
-        dlg = (*dlg).next;
+        let next = (*dlg).next;
+        if next.is_null() {
+            return;
+        }
+        dlg = next;
         guard += 1;
     }
 }

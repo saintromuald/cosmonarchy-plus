@@ -71,7 +71,8 @@ struct NodeState {
     y: i32,
     tier1: u32,
     tier2: u32,
-    optimal: u32,
+    /// Flat worker capacity: 3 for a mineral patch, 3 for a gas node.
+    capacity: u32,
     color: u8,
     /// Straight-line distance to the nearest depot (px), for the log.
     dist: u32,
@@ -92,7 +93,8 @@ struct DepotState {
     race: u8,
     tier1: u32,
     tier2: u32,
-    optimal: u32,
+    /// Flat capacity: 3 workers × the mineral patches this depot serves.
+    capacity: u32,
     color: u8,
 }
 
@@ -237,7 +239,33 @@ unsafe extern "stdcall" fn draw_hook(surface: *mut core::ffi::c_void, bounds: *m
     // Larva picker: fires the selection on a confirmed count, then draws its entry UI.
     crate::larva_pick::poll();
     crate::larva_pick::draw();
+    // Smart Tab: rotate the active selection subgroup on a fresh Tab press.
+    crate::tab_cycle::poll();
+    // Tab indicator (drawn regardless of the saturation overlay switch).
+    draw_tab_indicator();
     draw_pass();
+}
+
+/// The Tab subgroup indicator (`Tab g/n`), drawn for ~1.5 s after each Tab press.
+/// Independent of the saturation overlay switch.
+unsafe fn draw_tab_indicator() {
+    let Some((active, total)) = crate::tab_cycle::indicator(crate::frame::frame_count()) else {
+        return;
+    };
+    let font = in_game_font();
+    if font.is_null() {
+        return;
+    }
+    set_font_handle(font);
+    write_draw_text(0, 0, 0x7FFF, 0x7FFF);
+    *(G_PRINT_XY_ALIGNMENT as *mut u8) = 0x11;
+    get_color_handle(text_color::WHITE);
+    let mut buf = [0u8; 16];
+    buf.fill(0);
+    let _ = write!(&mut buf[..], "Tab {active}/{total}");
+    let (cx, cy) = camera();
+    bw_print_xy(buf.as_ptr(), cx + 60, cy + 250);
+    set_font_handle(core::ptr::null_mut());
 }
 
 /// The per-frame draw pass: recompute state on a new logic frame, then draw every node.
@@ -361,12 +389,18 @@ unsafe fn recompute(cache: &mut Cache, frame: u32) {
         }
 
         let dist = (best_dist2 as f64).sqrt();
-        let mut optimal = saturation::optimal_count_at_distance(dist);
+        // Flat model: every node takes 3 workers (optimal placement assumed).
+        let mut capacity = if saturation::is_mineral_field(node_id) {
+            saturation::MINERAL_WORKERS_PER_PATCH
+        } else {
+            saturation::GAS_WORKERS_PER_NODE
+        };
         let cap = OPT_CAP.load(Ordering::SeqCst);
         if cap != usize::MAX {
-            optimal = optimal.min(cap as u32);
+            capacity = capacity.min(cap as u32);
         }
-        let saturated = saturation::is_saturated(tier1, tier2, optimal);
+        let assigned = tier1 + tier2;
+        let saturated = assigned >= capacity;
         let race = player_race(owner);
         let color = if saturated {
             saturation::race_textcolor(race)
@@ -379,7 +413,7 @@ unsafe fn recompute(cache: &mut Cache, frame: u32) {
             y: ny,
             tier1,
             tier2,
-            optimal,
+            capacity,
             color,
             dist: dist as u32,
             owner,
@@ -388,8 +422,8 @@ unsafe fn recompute(cache: &mut Cache, frame: u32) {
         });
     }
 
-    // Aggregate each visible depot's mineral line: assigned workers + summed optima of
-    // the mineral fields it serves (within SERVICE_RADIUS). Drawn above the building.
+    // Aggregate each visible depot's mineral line: assigned workers + flat capacity
+    // (3 per field it serves, within SERVICE_RADIUS). Drawn above the building.
     cache.depots.clear();
     for &(player, dx, dy, sprite_ptr) in &cache.scratch_depots {
         let sprite = sprite_ptr as *mut bw_dat::structs::Sprite;
@@ -398,7 +432,7 @@ unsafe fn recompute(cache: &mut Cache, frame: u32) {
         }
         let mut tier1 = 0u32;
         let mut tier2 = 0u32;
-        let mut optimal = 0u32;
+        let mut capacity = 0u32;
         for n in &cache.nodes {
             if n.is_gas || n.owner != player {
                 continue;
@@ -408,13 +442,14 @@ unsafe fn recompute(cache: &mut Cache, frame: u32) {
             if ddx * ddx + ddy * ddy <= SERVICE_RADIUS_PX * SERVICE_RADIUS_PX {
                 tier1 += n.tier1;
                 tier2 += n.tier2;
-                optimal += n.optimal;
+                capacity += n.capacity;
             }
         }
-        if optimal == 0 {
+        if capacity == 0 {
             continue; // no visible mineral line near this depot
         }
-        let saturated = saturation::is_saturated(tier1, tier2, optimal);
+        let assigned = tier1 + tier2;
+        let saturated = assigned >= capacity;
         let race = player_race(player);
         let color = if saturated {
             saturation::race_textcolor(race)
@@ -428,7 +463,7 @@ unsafe fn recompute(cache: &mut Cache, frame: u32) {
             race,
             tier1,
             tier2,
-            optimal,
+            capacity,
             color,
         });
     }
@@ -449,31 +484,30 @@ unsafe fn log_nodes(frame: u32, nodes: &[NodeState], (cam_x, cam_y): (i32, i32))
         return;
     }
     let mut msg = format!(
-        "[cosmo-plus] overlay frame {frame}: {} node(s) camera=({cam_x},{cam_y}) [x,y t1+t2=eff/optimal dist owner race colour saturated]",
+        "[cosmo-plus] overlay frame {frame}: {} node(s) camera=({cam_x},{cam_y}) [x,y t1+t2=assigned/capacity dist owner race colour saturated]",
         nodes.len()
     );
     for n in nodes {
         msg.push_str(&format!(
-            " | ({},{}) {}+{}={:.1}/{} dist={} owner={} race={} col={:02x} sat={}",
+            " | ({},{}) {}+{}={}/{} dist={} owner={} race={} col={:02x} sat={}",
             n.x,
             n.y,
             n.tier1,
             n.tier2,
-            saturation::weighted_count(n.tier1, n.tier2),
-            n.optimal,
+            n.tier1 + n.tier2,
+            n.capacity,
             n.dist,
             n.owner,
             n.race,
             n.color,
-            saturation::is_saturated(n.tier1, n.tier2, n.optimal),
+            n.tier1 + n.tier2 >= n.capacity,
         ));
     }
     crate::log::log(&msg);
 }
 
-/// Draw the weighted-count row above one node (world -> screen transform:
-/// `world - camera`). Format: `t1+t2x1.5=eff/opt` — the advanced worker's 1.5x
-/// mining weight is written out so the math is visible.
+/// Draw the flat assigned/capacity row above one node (world -> screen transform:
+/// `world - camera`). Format: `assigned/capacity` (e.g. `2/3` on a geyser).
 unsafe fn draw_node(n: &NodeState, buf: &mut [u8; 16]) {
     let (cx, cy) = camera();
     let sx = n.x - cx;
@@ -482,14 +516,14 @@ unsafe fn draw_node(n: &NodeState, buf: &mut [u8; 16]) {
     get_color_handle(n.color);
 
     buf.fill(0);
-    let label = saturation::format_weighted(n.tier1, n.tier2, n.optimal);
+    let label = saturation::format_flat(n.tier1 + n.tier2, n.capacity);
     let _ = write!(&mut buf[..], "{label}");
     bw_print_xy(buf.as_ptr(), sx - 10, sy - 28);
 }
 
 /// Draw the SC2-style mineral count above one town hall:
-/// `t1+t2x1.5=eff/opt`, white while under-saturated, the owner's race colour
-/// once the weighted count saturates.
+/// `assigned/capacity` (e.g. `12/24` on 8 patches), white while under-saturated,
+/// the owner's race colour once saturated.
 unsafe fn draw_depot(d: &DepotState, buf: &mut [u8; 16]) {
     let (cx, cy) = camera();
     let sx = d.x - cx;
@@ -498,7 +532,7 @@ unsafe fn draw_depot(d: &DepotState, buf: &mut [u8; 16]) {
     get_color_handle(d.color);
 
     buf.fill(0);
-    let label = saturation::format_weighted(d.tier1, d.tier2, d.optimal);
+    let label = saturation::format_flat(d.tier1 + d.tier2, d.capacity);
     let _ = write!(&mut buf[..], "{label}");
     bw_print_xy(buf.as_ptr(), sx - 8, sy - 40);
 }

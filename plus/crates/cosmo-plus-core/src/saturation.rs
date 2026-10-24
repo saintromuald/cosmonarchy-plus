@@ -106,6 +106,30 @@ pub fn format_weighted(tier1: u32, tier2: u32, optimal: u32) -> String {
     )
 }
 
+// ---------------------------------------------------------------------------
+// Flat saturation model (the player-facing default).
+//
+// The overlay shows plain assigned/capacity numbers: a mineral patch holds
+// **3 workers**, a gas node **3 workers**, assuming the base is built as close
+// as possible (optimal placement). The distance/speed model above stays for
+// the measurement docs, but the in-game labels use these constants.
+// ---------------------------------------------------------------------------
+
+/// Workers per mineral patch in the flat model.
+pub const MINERAL_WORKERS_PER_PATCH: u32 = 3;
+/// Workers per gas node (geyser) in the flat model.
+pub const GAS_WORKERS_PER_NODE: u32 = 3;
+
+/// The flat label: `assigned/capacity` (e.g. `12/24`, `2/3`).
+pub fn format_flat(assigned: u32, capacity: u32) -> String {
+    format!("{assigned}/{capacity}")
+}
+
+/// The flat capacity for `patches` mineral fields (3 workers each).
+pub fn mineral_capacity(patches: u32) -> u32 {
+    patches.saturating_mul(MINERAL_WORKERS_PER_PATCH)
+}
+
 /// Mineral-field unit ids (a.k.a. `ResourceMineralField{,_Type2,_Type3}`).
 pub const MINERAL_FIELD_IDS: &[u16] = &[176, 177, 178];
 /// Neutral gas node ids (`ResourceVespeneGeyser`, `ResourceVespeneRidge`).

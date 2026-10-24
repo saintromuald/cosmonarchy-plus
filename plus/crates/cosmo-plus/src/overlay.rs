@@ -85,6 +85,12 @@ const CHANGES_LINES: &[&str] = &[
     "Netcode: rollback host/join (armed by the launcher)",
     "Crash: Ctrl+F11 saves a bug bundle for reporting",
 ];
+/// The in-game F10 menu dialog (`g_popup_dialog`), exposed by the game as a
+/// BinDlg* global. Its Help control is relabelled to "Plus Changes" and its
+/// interaction function replaced with ours - a real menu entry without
+/// touching the dialog .bin or the engine UI.
+const G_POPUP_DIALOG: usize = 0x006D5BF4;
+const MENU_TEXT: &[u8] = b"pPlus Changes (\0";
 const CHANGES_DEFAULT_KEY: u16 = 0x13; // VK_PAUSE
 const CHANGES_HINT_FRAMES: u32 = 24 * 20; // ~20 s at 24 logic frames/s
 static CHANGES_VISIBLE: AtomicBool = AtomicBool::new(false);
@@ -285,6 +291,7 @@ unsafe extern "stdcall" fn draw_hook(surface: *mut core::ffi::c_void, bounds: *m
     // switch or of whether the local player has any labelled nodes left.
     draw_world_annotations();
     draw_pass();
+    patch_game_menu();
     poll_changes();
     draw_changes();
 }
@@ -859,6 +866,90 @@ pub(crate) unsafe fn draw_changes() {
         bw_print_xy(buf.as_ptr(), cx + 60, cy + 24);
     }
     set_font_handle(core::ptr::null_mut());
+}
+
+// ---------------------------------------------------------------------------
+// Game-menu entry: relabel the Help button to "Plus Changes" and handle it.
+// ---------------------------------------------------------------------------
+
+/// Minimal `BinDlg` (1.16.1) prefix; the rest is control-type data we do not touch.
+#[repr(C)]
+struct BinDlg {
+    next: *mut BinDlg,
+    bounds: [i16; 4],
+    bitmap: [u8; 8],
+    text: *const u8,
+    flags: u32,
+    unk_1c: u32,
+    index: u16,
+    control_type: u16,
+    graphic: u16,
+    user: *mut core::ffi::c_void,
+    fxn_interact: Option<unsafe extern "fastcall" fn(*mut BinDlg, *mut DialogEvent) -> u32>,
+}
+
+/// Minimal `DialogEvent`.
+#[repr(C)]
+struct DialogEvent {
+    user: u32,
+    param: u16,
+    field_6: u16,
+    virtual_key: u16,
+    virtual_key_modifier: u16,
+    number_order: u16,
+    current: [u16; 2],
+    field_12: u16,
+}
+
+/// Runs when the relabelled menu entry is activated (mouse or its letter).
+unsafe extern "fastcall" fn changes_menu_interact(
+    _control: *mut BinDlg,
+    event: *mut DialogEvent,
+) -> u32 {
+    if !event.is_null() {
+        let ev = &*event;
+        // 4/5 = left button down/up, 0 = key down (the menu's letter shortcut).
+        if matches!(ev.number_order, 0 | 4 | 5) {
+            let now = !CHANGES_VISIBLE.load(Ordering::SeqCst);
+            CHANGES_VISIBLE.store(now, Ordering::SeqCst);
+            crate::log::log(&format!(
+                "[cosmo-plus] changes panel: {} from the game menu",
+                if now { "shown" } else { "hidden" }
+            ));
+            return 1;
+        }
+    }
+    0
+}
+
+/// Runs every draw frame: when the F10 menu is open, relabel its Help control
+/// and take over its click. Cheap when no popup exists.
+pub(crate) unsafe fn patch_game_menu() {
+    let root = *(G_POPUP_DIALOG as *const *mut BinDlg);
+    if root.is_null() {
+        return;
+    }
+    let mut dlg = root;
+    let mut guard = 0;
+    while !dlg.is_null() && guard < 64 {
+        let text = (*dlg).text;
+        if !text.is_null() {
+            let bytes = core::ffi::CStr::from_ptr(text as *const core::ffi::c_char).to_bytes();
+            let lower = bytes.to_ascii_lowercase();
+            if lower.windows(4).any(|w| w == b"help") {
+                if (*dlg).text != MENU_TEXT.as_ptr() {
+                    (*dlg).text = MENU_TEXT.as_ptr();
+                    (*dlg).fxn_interact = Some(changes_menu_interact);
+                    crate::log::log(
+                        "[cosmo-plus] game menu: Help relabelled to Plus Changes (P)",
+                    );
+                }
+                return;
+            }
+        }
+        dlg = (*dlg).next;
+        guard += 1;
+    }
 }
 
 /// Draw a small panel of text lines fixed to the screen (draft UI). Screen space is

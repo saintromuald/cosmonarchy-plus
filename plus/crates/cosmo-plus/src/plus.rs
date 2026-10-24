@@ -79,4 +79,8 @@ pub(crate) fn install() {
     // Larva picker (F12 by default; see larva_pick.rs). Needs the draw hook and
     // installs its own keyboard hook for the count entry.
     crate::larva_pick::install();
+    // CapsLock + WASD camera pan (see cam_pan.rs). Own keyboard hook.
+    crate::cam_pan::install();
+    // Smart Tab subgroup cycling (see tab_cycle.rs). Polled from the draw hook.
+    crate::tab_cycle::install();
 }

@@ -7,6 +7,7 @@
 #![allow(dead_code, non_snake_case)]
 
 mod antimeta;
+mod cam_pan;
 mod config;
 mod crash;
 mod data;
@@ -21,6 +22,7 @@ mod overlay;
 mod plugin;
 mod plus;
 mod select;
+mod tab_cycle;
 mod ultraload;
 mod ultraload_icon;
 mod zoom;

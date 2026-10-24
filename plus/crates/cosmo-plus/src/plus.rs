@@ -81,6 +81,6 @@ pub(crate) fn install() {
     crate::larva_pick::install();
     // CapsLock + WASD camera pan (see cam_pan.rs). Own keyboard hook.
     crate::cam_pan::install();
-    // Smart Tab subgroup cycling (see tab_cycle.rs). Polled from the draw hook.
+    // SC2-style Tab subgroup cycling (see tab_cycle.rs). Polled from the draw hook.
     crate::tab_cycle::install();
 }

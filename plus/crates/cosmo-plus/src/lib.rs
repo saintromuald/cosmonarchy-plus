@@ -24,6 +24,8 @@ mod overlay;
 mod plugin;
 mod plus;
 mod select;
+mod selftest;
+mod state;
 mod tab_cycle;
 mod ultraload;
 mod ultraload_icon;

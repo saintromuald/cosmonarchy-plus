@@ -1,27 +1,42 @@
 #!/usr/bin/env bash
-# Boot Cosmonarchy headlessly and check that the Plus plugin loaded and stayed quiet.
-# Exit 0 = log found and no panic/error line; 1 = missing; 2 = suspicious log.
-set -u
+# One-command verification: host tests -> cross build -> headless boot ->
+# boot-state validation + plugin self-test verdict.
+#
+# Runs against the *dev* prefix (cosmonarchy-agent2), never the player's build.
+set -euo pipefail
+
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-BUILD="${1:-Release}"
-GAME_ROOT="${COSMO_GAME_ROOT:-$HOME/Games/cosmonarchy}"
-LOG="$GAME_ROOT/prefix/drive_c/Cosmonarchy/$BUILD/cosmo_plus.log"
+PREFIX="${COSMO_VERIFY_PREFIX:-$HOME/Games/cosmonarchy-agent2/prefix}"
+BUILD="${COSMO_VERIFY_BUILD:-Release}"
+V="$PREFIX/drive_c/Cosmonarchy/$BUILD"
+DISPLAY_NUM="${COSMO_VERIFY_DISPLAY:-99}"
 
-: > "$LOG"
-"$ROOT/tools/build.sh" >/dev/null
-"$ROOT/tools/install-plus.sh" "$BUILD" >/dev/null
-bash "$HOME/Projects/cosmonarchy-rollback/tools/headless_probe.sh" "$BUILD" none "" \
-    /tmp/opencode/plus-verify.png 40 2 >/dev/null 2>&1
+cd "$ROOT/plus"
+echo "== host tests (cosmo-plus-core) =="
+cargo test -p cosmo-plus-core 2>&1 | tail -4
 
-if [[ ! -s "$LOG" ]]; then
-    echo "FAIL: no $LOG (plugin did not load)"
+cd "$ROOT"
+echo "== cross build =="
+PROFILE=release tools/build.sh 2>&1 | tail -1
+
+echo "== install into dev prefix ($BUILD) =="
+COSMO_GAME_ROOT="$HOME/Games/cosmonarchy-agent2" \
+    PROFILE=release tools/install-plus.sh "$BUILD"
+
+echo "== headless boot (Xvfb :$DISPLAY_NUM) =="
+tools/headless/stop_game.sh "$DISPLAY_NUM" >/dev/null
+if ! tools/headless/boot_game.sh "$DISPLAY_NUM"; then
+    echo "BOOT FAILED; game log tail:"
+    tail -20 "/tmp/opencode/harness/game-$DISPLAY_NUM.log" || true
     exit 1
 fi
 
-echo "--- $LOG"
-cat "$LOG"
-if grep -qiE "panic|error|failed|exception" "$LOG"; then
-    echo "FAIL: suspicious log line"
-    exit 2
-fi
-echo "OK: Plus loaded cleanly"
+echo "== boot state =="
+tools/headless/check_state.py "$V/cosmo_plus.state.json" || exit 1
+
+echo "== plugin self-test =="
+cat "$V/cosmo_plus.selftest"
+grep -q '^PASS' "$V/cosmo_plus.selftest" || exit 1
+
+echo "== all green =="
+tools/headless/stop_game.sh "$DISPLAY_NUM" >/dev/null

@@ -119,16 +119,17 @@ phase lands.
   a control group bound to it no longer fires; Ctrl/Alt/Shift + key is left to the game, and
   the hook is inert in chat and modal dialogs. One press selects one idle worker, the next
   press selects the next (SC2-F1 style).
-- **Badge:** anchored to the live minimap rect (just above the terrain/"Hide Terrain (Tab)"
-  button, left edge aligned with it) instead of a hard-coded screen spot, and drawn as
-  `screen + camera` like the minimap labels — the previous build drew at raw world
-  coordinates, so the badge scrolled with the view. The command-card icon is
-  nearest-neighbour scaled to 24×22 (was the full 64×60 frame) and the count uses the small
-  font. `CM_PLUS_IDLE_BADGE_X/Y` still override the position.
+- **Badge:** anchored to the live minimap rect (above the terrain/"Hide Terrain (Tab)"
+  button, left edge aligned with it) instead of a hard-coded screen spot, and drawn in
+  screen coordinates — the badge used to be at raw world coordinates, so it scrolled with
+  the view (adding the camera to compensate puts it off the viewport; `bw_print_xy` is
+  screen-space on the draw-hook surface). The count is drawn first, the command-card icon
+  (nearest-neighbour scaled 64×60 → 24×22) last, so the number survives any icon-blit
+  quirk. `CM_PLUS_IDLE_BADGE_X/Y` still override the position.
 - **Verified:** `cosmo_plus.conf` armed (`armed from cosmo_plus.conf: 1 setting(s)`),
-  `idle workers: hotkey , (VK 0xBC)`, `keyboard hook installed`, and the minimap rect read
-  live from the running game (`6,348,133,475`) puts the badge at screen `18,304` — above
-  the panel at every camera position.
+  `idle workers: hotkey , (VK 0xBC)`, `keyboard hook installed`, and an xdotool `,` press
+  in a live game logged `idle workers: selecting 1 of 6 (index 0)`. The minimap rect read
+  live from the running game (`6,348,133,475`) puts the badge at screen `18,280`.
 
 ## Separation
 

@@ -131,6 +131,51 @@ phase lands.
   in a live game logged `idle workers: selecting 1 of 6 (index 0)`. The minimap rect read
   live from the running game (`6,348,133,475`) puts the badge at screen `18,280`.
 
+## 6. Development infrastructure — DONE and verified end to end
+
+- **Fake-engine core.** `cosmo-plus-core/src/idle.rs` holds the idle predicate behind a
+  `UnitView` trait; the engine crate adapts `bw_dat::structs::Unit` through a local
+  wrapper. 67 host tests cover every branch of the predicate — no game boot needed.
+- **Self-verifying integration layer.** `cosmo-plus/src/state.rs` resolves and
+  plausibility-checks every fixed global at boot, tracks feature/hook/config status, and
+  writes `cosmo_plus.state.json` (boot stage, then again at the first game tick with
+  strict checks). The idle badge reads the *validated* minimap rect and disarms loudly on
+  a bad address.
+- **Verification harness.** `tools/verify-plus.sh` = core tests → cross build → install
+  into the dev prefix (cosmonarchy-agent2, never the player's) → headless boot on a
+  private Xvfb → boot-report validation → plugin self-test verdict
+  (`CM_PLUS_SELFTEST=1`, 14 checks, PASS/FAIL file). Green on the player build and the
+  dev build.
+- **Dev REPL.** `CM_PLUS_REPL=1` polls `cosmo_plus.cmd` (~2 Hz); commands: badge
+  on/off/pin/default, transient icon/text probes on the live frame, `idle` (queues a
+  selection), `state`, `frame`, `units` (per-player), `reload-config` (in-place
+  re-arming of every config-driven feature). `tools/cosmo-repl` drives it.
+- **Hot reload.** Config-only changes reload in place; code changes use
+  `tools/cosmo-restart.sh` (kill + relaunch, no menu clicking). In-place DLL swap is
+  blocked on the game's closed-source hotloader (loads plugins once per boot) — see
+  `docs/dev-loop.md`.
+- **Hook ownership.** Every hook is registered in the state report; the draw-proc
+  install audits that the pointer it chains lives inside `gptp.qdp`'s image (verified:
+  "draw proc owned by gptp.qdp (expected)"); the self-test requires the three boot-time
+  keyboard hooks. Contract in `docs/hook-order.md`.
+
+### Per-plugin verification (headless solo match, dev prefix)
+
+| Plugin | Verified |
+| --- | --- |
+| `_qdp-hotloader.qdp` | all plugins loaded; match ran |
+| `gptp.qdp` | samase api complete (selftest), draw proc owned by gptp, zoom site found+patched on the player build |
+| `zz-cosmo-plus.qdp` | idle selection logged in-game, badge + REPL probes rendered (screenshot), overlay labels drawn, hooks 5/5, selftest 14/14 |
+| `zz-cosmo-rollback.qdp` | loads, relocates `unit_finder_x/y` inside gptp.qdp (its core mechanism) |
+| `aise.qdp` | AI ran: computer-player units present, sim advanced (147 → 152 units over 45 s) |
+| `isdbg.qdp` | "Executable patched successfully… Listening for errors" |
+| `fastmenus/mtl/vx4ex/aize_debug.qdp` | loaded with the game; menus navigated, match ran (their effects are in-game UX, exercised by the menu walk + match) |
+
+**Known gap (explicitly reported, previously silent):** the shipped `gptp.qdp` lacks the
+`cosmo_camera_screens` export, so C1-C8 minimap labels disarm on every build; the report
+now says so instead of the feature drawing nothing. Enabling them needs the gptp fork
+build with that export.
+
 ## Separation
 
 - `netcode/` untouched by all of the above.

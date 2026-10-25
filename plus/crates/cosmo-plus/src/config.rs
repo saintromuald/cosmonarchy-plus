@@ -14,6 +14,17 @@
 
 use cosmo_plus_core::config::PlusConfig;
 
+use once_cell::sync::Lazy;
+use std::sync::Mutex;
+
+/// Config keys applied from `cosmo_plus.conf` (for the boot state report).
+static APPLIED_KEYS: Lazy<Mutex<Vec<String>>> = Lazy::new(|| Mutex::new(Vec::new()));
+
+/// The keys applied from the conf file, in order.
+pub fn applied_keys() -> Vec<String> {
+    APPLIED_KEYS.lock().unwrap().clone()
+}
+
 pub fn load() -> u32 {
     let mut applied = 0u32;
     for path in ["cosmo_plus.conf", "plugins/cosmo_plus.conf"] {
@@ -34,6 +45,7 @@ pub fn load() -> u32 {
                 continue;
             }
             std::env::set_var(key, value);
+            APPLIED_KEYS.lock().unwrap().push(key.to_string());
             applied += 1;
         }
         if applied > 0 {

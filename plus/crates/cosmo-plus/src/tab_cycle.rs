@@ -87,6 +87,16 @@ static RESOLVED: AtomicBool = AtomicBool::new(false);
 
 /// Forward cycle key (default Tab) and optional separate backward key (0 = none).
 static FWD_VK: AtomicU16 = AtomicU16::new(0);
+
+/// Resolved status for the boot report.
+pub(crate) fn status() -> String {
+    let vk = FWD_VK.load(Ordering::SeqCst);
+    if vk == 0 {
+        "disabled (no valid key)".to_string()
+    } else {
+        format!("armed (VK 0x{vk:02X})")
+    }
+}
 static PREV_VK: AtomicU16 = AtomicU16::new(0);
 
 /// The keyboard hook handle, kept for the process lifetime.

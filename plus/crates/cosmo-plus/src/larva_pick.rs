@@ -39,6 +39,16 @@ const ID_ZERG_OCSAL_LARVA: u16 = 353;
 
 /// The resolved larva key VK (0 = disabled), set once at install.
 static KEY_VK: AtomicU16 = AtomicU16::new(0);
+
+/// Resolved status for the boot report.
+pub(crate) fn status() -> String {
+    let vk = KEY_VK.load(Ordering::SeqCst);
+    if vk == 0 {
+        "disabled (no valid key)".to_string()
+    } else {
+        format!("armed (VK 0x{vk:02X})")
+    }
+}
 /// The entry window length in ms (`CM_PLUS_LARVA_ENTRY_MS`, default 2000).
 static ENTRY_MS: AtomicU32 = AtomicU32::new(ENTRY_TIMEOUT_MS as u32);
 /// Whether the count-entry window is open.

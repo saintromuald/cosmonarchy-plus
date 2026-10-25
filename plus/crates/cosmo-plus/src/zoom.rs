@@ -27,6 +27,18 @@ const MODULE_NAME: &str = "gptp.qdp";
 /// `cosmo_plus.conf` / environment override for the player floor, in percent.
 const ENV_PLAYER_FLOOR: &str = "CM_PLUS_ZOOM_PLAYER_MIN";
 
+/// Whether the player-floor patch was applied (for the boot report).
+static PATCHED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// Resolved status for the boot report.
+pub(crate) fn status() -> String {
+    if PATCHED.load(std::sync::atomic::Ordering::SeqCst) {
+        format!("armed (player floor {}%)", player_floor_percent())
+    } else {
+        "not patched (site missing or already modified)".to_string()
+    }
+}
+
 /// Resolve the configured player floor: env override, clamped to the engine's
 /// `set_min_zoom_percent` bounds, else the Plus default (125%).
 fn player_floor_percent() -> u32 {
@@ -49,7 +61,7 @@ fn player_floor_percent() -> u32 {
 }
 
 /// Base and size of the loaded `gptp.qdp`, if present.
-fn gptp_module() -> Option<(usize, usize)> {
+pub(crate) fn gptp_module() -> Option<(usize, usize)> {
     unsafe {
         let snap = CreateToolhelp32Snapshot(TH32CS_SNAPMODULE | TH32CS_SNAPMODULE32, 0);
         if snap == INVALID_HANDLE_VALUE {

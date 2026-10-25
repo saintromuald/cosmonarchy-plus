@@ -37,6 +37,13 @@ pub(crate) fn config() -> Option<&'static PlusConfig> {
 
 pub(crate) fn install() {
     let cfg = crate::config::load_plus_yml();
+    crate::state::feature(
+        "data-overrides",
+        match cfg.as_ref() {
+            Some(c) => format!("armed ({} override(s))", c.overrides.len()),
+            None => "disabled (no plus.yml)".to_string(),
+        },
+    );
     let _ = CONFIG.set(cfg);
 
     crate::log::log(&format!(
@@ -49,6 +56,7 @@ pub(crate) fn install() {
 
     // Crash self-capture first: vectored exception handler + panic hook.
     unsafe { crate::crash::install() };
+    crate::state::feature("crash-capture", "armed");
 
     // May be too early for the template list (built during engine init); the first game
     // tick calls this again as a fallback.
@@ -64,25 +72,48 @@ pub(crate) fn install() {
     // isolate a boot-time crash/hang. Off by default (everything installs).
     if !crate::config::env_flag("CM_PLUS_NO_FRAME_HOOK") {
         crate::frame::install();
+        crate::state::feature("frame-hook", "armed (after StepObjects)");
+    } else {
+        crate::state::feature("frame-hook", "disarmed: CM_PLUS_NO_FRAME_HOOK");
     }
     if !crate::config::env_flag("CM_PLUS_NO_DRAW_HOOK") {
         crate::overlay::install();
+        crate::state::feature(
+            "draw-hook-overlay",
+            if crate::overlay::enabled() { "armed" } else { "off by config" },
+        );
+    } else {
+        crate::state::feature("draw-hook-overlay", "disarmed: CM_PLUS_NO_DRAW_HOOK");
     }
     if !crate::config::env_flag("CM_PLUS_NO_ZOOM") {
         crate::zoom::install_player_zoom_floor();
+        crate::state::feature("zoom-floor", crate::zoom::status());
+    } else {
+        crate::state::feature("zoom-floor", "disarmed: CM_PLUS_NO_ZOOM");
     }
 
     // Idle-worker hotkey (F9 by default; see idle_workers.rs). Independent of the
     // overlay switch — it is polled from the draw hook, so it needs that hook.
     crate::idle_workers::install();
+    crate::state::feature("idle-workers", crate::idle_workers::status());
     crate::ultraload::install();
+    crate::state::feature("ultraload", crate::ultraload::status());
     // Camera hotkey labels (C1-C8 on the minimap): needs the gptp export.
     crate::cam_labels::install();
+    crate::state::feature("camera-labels", crate::cam_labels::status());
     // Larva picker (F12 by default; see larva_pick.rs). Needs the draw hook and
     // installs its own keyboard hook for the count entry.
     crate::larva_pick::install();
+    crate::state::feature("larva-pick", crate::larva_pick::status());
     // CapsLock + WASD camera pan (see cam_pan.rs). Own keyboard hook.
     crate::cam_pan::install();
+    crate::state::feature("cam-pan", crate::cam_pan::status());
     // SC2-style Tab subgroup cycling (see tab_cycle.rs). Polled from the draw hook.
     crate::tab_cycle::install();
+    crate::state::feature("tab-cycle", crate::tab_cycle::status());
+
+    // Boot integration report: resolve + verify every fixed global, dump the
+    // feature/hook/config map to cosmo_plus.state.json (also reachable from the
+    // REPL `state` command).
+    unsafe { crate::state::write_report() };
 }

@@ -129,6 +129,16 @@ static LAST_SELECTED: AtomicUsize = AtomicUsize::new(0);
 /// The keyboard hook handle, kept for the process lifetime.
 static HOOK: Mutex<Option<isize>> = Mutex::new(None);
 
+/// Resolved status for the boot report.
+pub(crate) fn status() -> String {
+    let vk = KEY_VK.load(Ordering::SeqCst);
+    if vk == 0 {
+        "disabled (no valid key)".to_string()
+    } else {
+        format!("armed (VK 0x{vk:02X})")
+    }
+}
+
 /// Resolve and log the hotkey, and install the keyboard hook (one-time, at load).
 pub(crate) fn install() {
     let name = crate::config::env("CM_PLUS_IDLE_WORKER_KEY")

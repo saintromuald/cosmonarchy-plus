@@ -31,6 +31,15 @@ const VK_RIGHT: u32 = 0x27;
 static GAME_HWND: AtomicUsize = AtomicUsize::new(0);
 /// Whether the hook is installed (master switch resolved at install).
 static ENABLED: AtomicBool = AtomicBool::new(false);
+
+/// Resolved status for the boot report.
+pub(crate) fn status() -> String {
+    if ENABLED.load(Ordering::SeqCst) {
+        "armed (CapsLock + WASD)".to_string()
+    } else {
+        "disabled (hook failed or no window)".to_string()
+    }
+}
 /// The keyboard hook handle, kept for the process lifetime.
 static HOOK: Mutex<Option<isize>> = Mutex::new(None);
 

@@ -28,6 +28,7 @@ export PROTON_VERB=waitforexitandrun
 export GAMEID="umu-cosmo-verify"
 export DISPLAY=":$DISPLAY_NUM"
 export CM_PLUS_SELFTEST=1
+export CM_PLUS_REPL="${CM_PLUS_REPL:-1}"
 export CM_PLUS_VERIFY="${CM_PLUS_VERIFY:-}"
 
 rm -f "$V/cosmo_plus.state.json" "$V/cosmo_plus.selftest"

@@ -92,7 +92,8 @@ const GLOBALS: &[Global] = &[
     // Loaded with the UI: legitimately zero while the game boots.
     Global { name: "G_CMDICONS_GRP", addr: 0x0068_C1E0, read: read_ptr, check: check_nonnull, strict: true },
     Global { name: "FONT_BASE", addr: 0x006C_E0F4, read: read_ptr, check: check_nonnull, strict: true },
-    Global { name: "G_DRAW_TEXT", addr: 0x006C_E0C8, read: read_rect, check: check_rect, strict: true },
+    // Scratch memory rewritten by every UI pass: report it, never fail on it.
+    Global { name: "G_DRAW_TEXT", addr: 0x006C_E0C8, read: read_rect, check: check_any, strict: false },
     Global { name: "G_PRINT_XY_ALIGNMENT", addr: 0x006C_E110, read: read_u8, check: check_any, strict: false },
     Global { name: "G_SCREEN_X", addr: 0x0062_8448, read: read_i32, check: check_any, strict: false },
     Global { name: "G_SCREEN_Y", addr: 0x0062_8470, read: read_i32, check: check_any, strict: false },

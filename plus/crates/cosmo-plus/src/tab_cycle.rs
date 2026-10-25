@@ -482,7 +482,11 @@ pub(crate) unsafe fn poll() {
         // Rotate the engine's own selection array: the chosen subgroup first,
         // everything else after it, order preserved. No select command and no
         // sound — this is viewer-local, exactly like SC2's subgroup pointer.
+        // Then rebuild the command card from the rotated array, so the active
+        // subgroup's spells/build buttons are the ones on the card and the
+        // hotkeys dispatch to them.
         rotate_selection(run.start, run.len, count);
+        refresh_command_card();
     }
 
     cycle.active = next as u32;
@@ -538,6 +542,26 @@ unsafe fn selection_contains(ptr: u32) -> bool {
         }
     }
     false
+}
+
+/// `update_selected_unit_data` (0x004C38B0) — the engine's own routine that
+/// rebuilds the command card, portrait and stats panel from the client
+/// selection. Called after every rotation so the active subgroup's abilities
+/// (and a building's build/upgrade buttons) win the card, exactly like SC2's
+/// subgroup swap.
+const ADDR_UPDATE_SELECTED_UNIT_DATA: usize = 0x004C38B0;
+static UPDATE_SELECTED_UNIT_DATA_ADDR: u32 = ADDR_UPDATE_SELECTED_UNIT_DATA as u32;
+
+/// Re-run the engine's selection-derived UI update (client-side only; the
+/// simulation state is untouched).
+unsafe fn refresh_command_card() {
+    core::arch::asm!(
+        "pushad",
+        "call dword ptr [{func}]",
+        "popad",
+        func = sym UPDATE_SELECTED_UNIT_DATA_ADDR,
+        options(nostack),
+    );
 }
 
 /// Rotate the engine's client selection array so the run

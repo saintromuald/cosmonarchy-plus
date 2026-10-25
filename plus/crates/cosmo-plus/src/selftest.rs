@@ -48,6 +48,13 @@ pub(crate) unsafe fn run() {
     // Validated globals.
     check!("minimap-rect-sane", crate::state::minimap_rect().is_some());
 
+    // Hook ownership: idle-workers, tab-cycle and larva-pick install their
+    // keyboard hooks at boot (cam-pan's waits for the game window).
+    check!(
+        "keyboard-hooks",
+        crate::state::keyboard_hook_count() >= 3
+    );
+
     // State report was written and parses as JSON-ish.
     let report_ok = std::fs::read_to_string("cosmo_plus.state.json")
         .map(|t| t.contains("\"globals_bad\": 0"))

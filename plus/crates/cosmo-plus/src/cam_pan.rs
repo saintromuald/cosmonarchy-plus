@@ -75,6 +75,7 @@ pub(crate) fn install() {
             return;
         }
         ENABLED.store(true, Ordering::SeqCst);
+        crate::state::hook("keyboard:cam-pan", h as usize, 0, 0);
         *HOOK.lock().unwrap() = Some(h as isize);
     }
 }

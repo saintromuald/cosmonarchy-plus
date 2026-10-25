@@ -119,6 +119,20 @@ pub(crate) fn feature(name: &'static str, status: impl Into<String>) {
     FEATURES.lock().unwrap().insert(name, status.into());
 }
 
+/// Number of recorded hooks, and how many of them are keyboard hooks.
+pub(crate) fn hook_count() -> usize {
+    HOOKS.lock().unwrap().len()
+}
+
+pub(crate) fn keyboard_hook_count() -> usize {
+    HOOKS
+        .lock()
+        .unwrap()
+        .keys()
+        .filter(|k| k.starts_with("keyboard:"))
+        .count()
+}
+
 /// Record a hook installation for the report.
 pub(crate) fn hook(name: &'static str, target: usize, old: usize, new: usize) {
     HOOKS.lock().unwrap().insert(

@@ -196,6 +196,7 @@ fn install_hook() {
         crate::log::log(
             "[cosmo-plus] idle workers: keyboard hook installed (the key is swallowed in-game)",
         );
+        crate::state::hook("keyboard:idle-workers", h as usize, 0, 0);
         *HOOK.lock().unwrap() = Some(h as isize);
     }
 }

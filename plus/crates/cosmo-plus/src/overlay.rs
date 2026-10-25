@@ -215,6 +215,25 @@ pub(crate) fn install() {
             "[cosmo-plus] overlay: hooked game draw proc (old 0x{old:08X} -> new 0x{my:08X}, patch={r})"
         ));
         crate::state::hook("draw-game-proc", DRAW_GAME_PROC_PTR, old as usize, my as usize);
+        // Ownership audit: the pointer we chained should live inside gptp.qdp.
+        // Anything else means another plugin stacked a hook first (or the
+        // build moved) — loud, not silent.
+        match crate::zoom::gptp_module() {
+            Some((base, size)) if (old as usize) >= base && (old as usize) < base + size => {
+                crate::log::log("[cosmo-plus] overlay: draw proc owned by gptp.qdp (expected)");
+            }
+            Some((base, size)) => {
+                crate::log::log(&format!(
+                    "[cosmo-plus] overlay: WARNING draw proc 0x{old:08X} outside gptp.qdp \
+                     (0x{base:08X}+{size:#x}) — another plugin hooked it first?"
+                ));
+            }
+            None => {
+                crate::log::log(
+                    "[cosmo-plus] overlay: WARNING gptp.qdp not found; draw proc owner unknown",
+                );
+            }
+        }
     }
 
     install_changes();

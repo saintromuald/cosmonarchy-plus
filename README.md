@@ -76,6 +76,21 @@ replay on vanilla Cosmonarchy.
    `CM_PLUS_CHANGES_KEY`; the panel is drawn in the draw pass, so it is
    local-only and safe with rollback.
 
+## Development loop & verification
+
+```
+tools/verify-plus.sh             # host tests + cross build + headless boot + self-test
+tools/cosmo-check.sh [build]     # latest boot report (globals, features, hooks)
+tools/cosmo-repl "badge 40 280"  # poke a running game (CM_PLUS_REPL=1)
+tools/cosmo-restart.sh [build]   # fast relaunch after a code change
+```
+
+See `docs/dev-loop.md` (which loop to use when) and `docs/hook-order.md`
+(ownership contract between gptp, Plus and the rollback plugin). The plugin
+writes `cosmo_plus.state.json` every boot: every fixed global with a
+plausibility verdict, every feature's armed/disarmed status, config keys and
+hook owners — a boot report diff is how regressions are found.
+
 ## Build & install
 
 ```

@@ -22,6 +22,10 @@ struct Global {
     read: unsafe fn(usize) -> String,
     /// None = always ok; Some(err) = why the value is not plausible.
     check: unsafe fn(usize) -> Option<&'static str>,
+    /// Strict globals are only *required* once a game is running: several UI
+    /// globals (icons GRP, fonts, draw-text box) are legitimately zero while
+    /// the game is still booting, and a boot-stage report must not flag them.
+    strict: bool,
 }
 
 unsafe fn read_i32(addr: usize) -> String {
@@ -82,22 +86,24 @@ unsafe fn check_any(_: usize) -> Option<&'static str> {
 /// The globals the plugin depends on. Read at report time so the dump always
 /// reflects live state (and a REPL `state` command can re-verify).
 const GLOBALS: &[Global] = &[
-    Global { name: "G_MINIMAP_RECT", addr: 0x0051_2D00, read: read_rect, check: check_rect },
-    Global { name: "G_CMDICONS_GRP", addr: 0x0068_C1E0, read: read_ptr, check: check_nonnull },
-    Global { name: "FONT_BASE", addr: 0x006C_E0F4, read: read_ptr, check: check_nonnull },
-    Global { name: "G_DRAW_TEXT", addr: 0x006C_E0C8, read: read_rect, check: check_rect },
-    Global { name: "G_PRINT_XY_ALIGNMENT", addr: 0x006C_E110, read: read_u8, check: check_any },
-    Global { name: "G_SCREEN_X", addr: 0x0062_8448, read: read_i32, check: check_any },
-    Global { name: "G_SCREEN_Y", addr: 0x0062_8470, read: read_i32, check: check_any },
-    Global { name: "G_PLAYER_TABLE", addr: 0x0057_EEE0, read: read_ptr, check: check_nonnull },
-    Global { name: "CHAT_MESSAGE_TYPE", addr: 0x0068_C144, read: read_ptr, check: check_any },
-    Global { name: "POPUP_DIALOG", addr: 0x006D_5BF4, read: read_u32, check: check_any },
-    Global { name: "BW_PRINT_XY", addr: 0x0042_02B0, read: read_u32, check: check_code },
-    Global { name: "BW_PRINT_ICON", addr: 0x0041_D090, read: read_u32, check: check_code },
-    Global { name: "SET_FONT_HANDLE", addr: 0x0041_FB30, read: read_u32, check: check_code },
-    Global { name: "GET_COLOR_HANDLE", addr: 0x0041_F610, read: read_u32, check: check_code },
-    Global { name: "DRAW_GAME_PROC_PTR", addr: 0x004B_D68D, read: read_u32, check: check_code },
-    Global { name: "SELECT_UNITS", addr: 0x0046_FA00, read: read_u32, check: check_code },
+    Global { name: "G_MINIMAP_RECT", addr: 0x0051_2D00, read: read_rect, check: check_rect, strict: true },
+    // Inline arrays, not pointers: always "ok" once readable.
+    Global { name: "G_PLAYER_TABLE", addr: 0x0057_EEE0, read: read_u32, check: check_any, strict: false },
+    // Loaded with the UI: legitimately zero while the game boots.
+    Global { name: "G_CMDICONS_GRP", addr: 0x0068_C1E0, read: read_ptr, check: check_nonnull, strict: true },
+    Global { name: "FONT_BASE", addr: 0x006C_E0F4, read: read_ptr, check: check_nonnull, strict: true },
+    Global { name: "G_DRAW_TEXT", addr: 0x006C_E0C8, read: read_rect, check: check_rect, strict: true },
+    Global { name: "G_PRINT_XY_ALIGNMENT", addr: 0x006C_E110, read: read_u8, check: check_any, strict: false },
+    Global { name: "G_SCREEN_X", addr: 0x0062_8448, read: read_i32, check: check_any, strict: false },
+    Global { name: "G_SCREEN_Y", addr: 0x0062_8470, read: read_i32, check: check_any, strict: false },
+    Global { name: "CHAT_MESSAGE_TYPE", addr: 0x0068_C144, read: read_ptr, check: check_any, strict: false },
+    Global { name: "POPUP_DIALOG", addr: 0x006D_5BF4, read: read_u32, check: check_any, strict: false },
+    Global { name: "BW_PRINT_XY", addr: 0x0042_02B0, read: read_u32, check: check_code, strict: true },
+    Global { name: "BW_PRINT_ICON", addr: 0x0041_D090, read: read_u32, check: check_code, strict: true },
+    Global { name: "SET_FONT_HANDLE", addr: 0x0041_FB30, read: read_u32, check: check_code, strict: true },
+    Global { name: "GET_COLOR_HANDLE", addr: 0x0041_F610, read: read_u32, check: check_code, strict: true },
+    Global { name: "DRAW_GAME_PROC_PTR", addr: 0x004B_D68D, read: read_u32, check: check_code, strict: true },
+    Global { name: "SELECT_UNITS", addr: 0x0046_FA00, read: read_u32, check: check_code, strict: true },
 ];
 
 /// Feature status registry: `feature("name", "armed: detail")`.
@@ -138,21 +144,29 @@ fn json_escape(s: &str) -> String {
 /// Write `cosmo_plus.state.json` in the game directory: build identity, loaded
 /// modules, every global with its live value and sanity verdict, feature
 /// statuses, config keys and installed hooks.
-pub(crate) unsafe fn write_report() {
+pub(crate) unsafe fn write_report(stage: &'static str) {
+    let in_game = stage == "in-game";
     let mut globals = String::new();
     let mut bad = 0usize;
     for g in GLOBALS {
         let value = (g.read)(g.addr);
         let err = (g.check)(g.addr);
-        if err.is_some() {
+        // Strict globals that are still zero during boot are "pending", not
+        // broken; in-game they must hold.
+        let ok = if err.is_some() && g.strict && !in_game {
+            "pending"
+        } else if err.is_some() {
             bad += 1;
-        }
+            "false"
+        } else {
+            "true"
+        };
         globals.push_str(&format!(
-            "    \"{}\": {{\"addr\":\"0x{:08X}\",\"value\":\"{}\",\"ok\":{}}},\n",
+            "    \"{}\": {{\"addr\":\"0x{:08X}\",\"value\":\"{}\",\"ok\":\"{}\"}},\n",
             json_escape(g.name),
             g.addr,
             json_escape(&value),
-            err.is_none(),
+            ok,
         ));
     }
     if globals.ends_with(",\n") {
@@ -194,7 +208,7 @@ pub(crate) unsafe fn write_report() {
         "{{\n\
          \x20 \"build\": {{\"version\":\"{}\",\"abi\":{},\"build_id\":\"{:#x}\",\"rev\":\"{}\"}},\n\
          \x20 \"modules\": {{\"gptp.qdp\": {{\"base\":\"{:#x}\",\"size\":{}}}, \"cosmo_plus.dll\": {{\"base\":\"{:#x}\"}}}},\n\
-         \x20 \"globals_bad\": {},\n\
+         \x20 \"stage\": \"{}\",\n         \x20 \"globals_bad\": {},\n\
          \x20 \"globals\": {{\n{}\n }},\n\
          \x20 \"features\": {{\n{}\n }},\n\
          \x20 \"config_keys\": [\n{}\n ],\n\
@@ -207,6 +221,7 @@ pub(crate) unsafe fn write_report() {
         gptp_base,
         gptp_size,
         crate::plugin::self_base(),
+        stage,
         bad,
         globals,
         features,

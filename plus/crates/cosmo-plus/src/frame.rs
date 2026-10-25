@@ -57,6 +57,9 @@ unsafe extern "C" fn tick() {
             }
         }
         FIRST_TICK.call_once(|| {
+            // In-game integration report: the strict globals (icons, fonts,
+            // draw-text box) are now required to hold live values.
+            unsafe { crate::state::write_report("in-game") };
             crate::antimeta::debug_dump_game_types_once();
             crate::ultraload_icon::install_once();
             if measure_enabled() {

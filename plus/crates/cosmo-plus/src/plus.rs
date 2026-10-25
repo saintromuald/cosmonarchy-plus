@@ -115,5 +115,6 @@ pub(crate) fn install() {
     // Boot integration report: resolve + verify every fixed global, dump the
     // feature/hook/config map to cosmo_plus.state.json (also reachable from the
     // REPL `state` command).
-    unsafe { crate::state::write_report() };
+    unsafe { crate::state::write_report("boot") };
+    unsafe { crate::selftest::run() };
 }

@@ -9,13 +9,15 @@
 //!     hotkeys, while plain orders (move/attack/stop) still go to every selected unit;
 //!   * selecting fresh resets to the first subgroup.
 //!
-//! Brood War has no subgroup concept, so this emulates it **without touching the
-//! selection**: the selection never changes; every unit stays selected (orders still
-//! apply to the whole group). The active subgroup is a viewer-local pointer, and the
-//! engine's UI is aimed at it by writing the active unit into
-//! `g_active_portrait_unit` (the global the wireframe, stats panel and command
-//! buttons all read) from the draw pass — the visible "highlight" that moves from
-//! group to group with each Tab, so spells can be cast group by group.
+//! Brood War has no subgroup concept, so this emulates it by **rotating the engine's
+//! own client selection array**: the active subgroup's units are moved to the front,
+//! so `selection[0]` — the unit the command card, spell hotkeys and portrait all
+//! derive from — belongs to the active subgroup. Spells therefore dispatch from the
+//! subgroup you Tab to (press Z with Mavericks active = Stim, Tab, press Z = the
+//! Phalanx siege), while the selection multiset never changes, so move/attack orders
+//! still reach every selected unit. The rotation is purely viewer-local (the client
+//! selection table is not part of the synced game state and no select command or
+//! sound is generated), matching how SC2 keeps the subgroup state per player.
 //!
 //! The Tab key is **swallowed** by a thread keyboard hook (installed after gptp's,
 //! so it runs first) while in a game — stock Brood War binds Tab to hiding the
@@ -96,16 +98,21 @@ static QUEUED: AtomicU32 = AtomicU32::new(0);
 /// Game frame until which the indicator stays visible.
 static SHOW_UNTIL_FRAME: AtomicU32 = AtomicU32::new(0);
 
-/// Selection identity and the active-subgroup state. `base` is the selection (as
-/// raw Unit* pointers) that the current cycle belongs to; a selection that does not
-/// match it is a fresh one and resets the cycle.
+/// Selection identity and the active-subgroup state. `base_sorted` is the
+/// selection (as sorted raw Unit* pointers) that the current cycle belongs to —
+/// order-insensitive, because the cycle itself rotates the array. A selection
+/// whose sorted pointers differ is a fresh one and resets the cycle.
+/// `groups_order` remembers the unit-id order of the subgroups as they first
+/// appeared, so the indicator numbers stay stable across rotations.
 struct Cycle {
+    /// Active subgroup index into `groups_order` (0-based).
     active: u32,
     groups: u32,
     count: usize,
     active_id: u16,
     active_ptr: u32,
-    base: [u32; EXTENDED_LIMIT],
+    base_sorted: Vec<u32>,
+    groups_order: Vec<u16>,
 }
 
 static CYCLE: Lazy<Mutex<Cycle>> = Lazy::new(|| {
@@ -115,7 +122,8 @@ static CYCLE: Lazy<Mutex<Cycle>> = Lazy::new(|| {
         count: 0,
         active_id: 0,
         active_ptr: 0,
-        base: [0; EXTENDED_LIMIT],
+        base_sorted: Vec::new(),
+        groups_order: Vec::new(),
     })
 });
 
@@ -345,8 +353,9 @@ unsafe fn selftest_selection() -> Option<(Vec<u16>, Vec<u32>)> {
 }
 
 /// Called from the draw pass each frame (like `idle_workers::poll`). Consumes the
-/// key presses queued by the keyboard hook and moves the active-subgroup highlight.
-/// The selection itself is never touched.
+/// key presses queued by the keyboard hook and rotates the engine's client
+/// selection array so the next subgroup's units come first (selection[0] = the
+/// unit whose spells/buttons the command card shows and dispatches).
 pub(crate) unsafe fn poll() {
     let frame = crate::frame::frame_count();
     if frame == 0 {
@@ -372,15 +381,28 @@ pub(crate) unsafe fn poll() {
         return;
     }
 
+    let mut sorted = ptrs.clone();
+    sorted.sort_unstable();
     let mut cycle = CYCLE.lock().unwrap();
-    // Fresh selection (different from the one the current cycle belongs to)
-    // resets to the first subgroup, like re-selecting in SC2.
-    let same_selection = cycle.count == count && cycle.base[..count] == ptrs[..];
+    // Fresh selection (different multiset, or different size, than the one the
+    // current cycle belongs to) resets to the first subgroup, like re-selecting
+    // in SC2. The array may be rotated from a previous cycle step, so identity
+    // is the sorted pointer multiset, not the order.
+    let same_selection = cycle.count == count && cycle.base_sorted == sorted;
     if !same_selection {
         cycle.active = 0;
         cycle.groups = 0;
         cycle.count = count;
-        cycle.base[..count].copy_from_slice(&ptrs);
+        cycle.base_sorted = sorted;
+        // Remember the subgroup type order as it appears in the fresh selection.
+        let fresh_runs = subgroup_runs(&ids);
+        cycle.groups_order = fresh_runs.iter().map(|r| r.unit_id).collect();
+        if crate::config::env_flag("CM_PLUS_TAB_DEBUG") {
+            crate::log::log(&format!(
+                "[cosmo-plus] tab cycle debug: fresh selection count={count} ids={:?}",
+                &ids[..count.min(12)],
+            ));
+        }
     }
 
     let runs = subgroup_runs(&ids);
@@ -399,9 +421,26 @@ pub(crate) unsafe fn poll() {
     }
 
     let groups = runs.len() as u32;
-    let next = (cycle.active as i32 + dir).rem_euclid(groups as i32) as u32;
-    let run = &runs[next as usize];
-    cycle.active = next;
+    // The active subgroup always sits at runs[0]: a fresh selection has its
+    // natural order, and a cycled one was rotated so the active run leads.
+    // Tab moves to runs[1]; Shift+Tab wraps to runs[groups-1].
+    let next_run_index = if dir > 0 { 1 } else { (groups - 1) as usize };
+    let run = &runs[next_run_index];
+
+    if !selftest {
+        // Rotate the engine's own selection array: the chosen subgroup first,
+        // everything else after it, order preserved. No select command and no
+        // sound — this is viewer-local, exactly like SC2's subgroup pointer.
+        rotate_selection(run.start, run.len, count);
+    }
+
+    let group_index = cycle
+        .groups_order
+        .iter()
+        .position(|&id| id == run.unit_id)
+        .unwrap_or(next_run_index) as u32;
+
+    cycle.active = group_index;
     cycle.groups = groups;
     cycle.active_id = run.unit_id;
     cycle.active_ptr = ptrs[run.start];
@@ -409,19 +448,46 @@ pub(crate) unsafe fn poll() {
 
     SHOW_UNTIL_FRAME.store(frame.saturating_add(INDICATOR_FRAMES), Ordering::SeqCst);
     crate::log::log(&format!(
-        "[cosmo-plus] tab cycle: active subgroup {}/{} ({} units, id {})",
-        next + 1,
+        "[cosmo-plus] tab cycle: active subgroup {}/{} ({} units, id {}, selection[0] now {})",
+        group_index + 1,
         groups,
         count,
-        run.unit_id
+        run.unit_id,
+        ptrs[run.start],
     ));
 }
 
-/// Called from the draw pass every frame (after `poll`): while a cycle is active,
-/// aim the engine's UI at the active subgroup's unit. The engine re-derives the
-/// displayed unit from `selection[0]` each frame, so this runs in the draw pass —
-/// after the simulation, before the UI renders — and it is the visible highlight
-/// (wireframe, stats panel and command buttons all read `g_active_portrait_unit`).
+/// Rotate the engine's client selection array so the run
+/// `[run_start, run_start + run_len)` is first. Reads the whole selection,
+/// then writes it back rotated; the count is untouched.
+unsafe fn rotate_selection(run_start: usize, run_len: usize, count: usize) -> bool {
+    let base = SEL_BASE.load(Ordering::SeqCst);
+    if base == 0 {
+        return false;
+    }
+    let list = base as *mut *mut Unit;
+    let mut rotated: Vec<u32> = Vec::with_capacity(count);
+    for i in run_start..run_start + run_len {
+        rotated.push(*list.add(i) as u32);
+    }
+    for i in 0..run_start {
+        rotated.push(*list.add(i) as u32);
+    }
+    for i in run_start + run_len..count {
+        rotated.push(*list.add(i) as u32);
+    }
+    for (i, &p) in rotated.iter().enumerate() {
+        *list.add(i) = p as *mut Unit;
+    }
+    true
+}
+
+/// Called from the draw pass every frame (after `poll`): while a cycle is
+/// active, confirm the engine's UI is aimed at the active subgroup's unit.
+/// After the rotation, `selection[0]` already IS that unit, so the engine
+/// re-derives the wireframe, stats panel and command buttons from it on its
+/// own; the write is a belt-and-braces nudge for engine paths that only
+/// refresh `g_active_portrait_unit` on selection-change events.
 pub(crate) unsafe fn apply_display() {
     let cycle = CYCLE.lock().unwrap();
     if cycle.groups < 2 || cycle.active_ptr == 0 {

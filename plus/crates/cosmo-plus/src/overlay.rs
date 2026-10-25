@@ -340,21 +340,22 @@ unsafe fn draw_idle_counter() {
         crate::log::log(&format!("[cosmo-plus] idle counter: first draw n={n}"));
     });
 
-    // Screen-fixed position: mid-left, above the bottom panel/minimap strip.
-    // The widescreen build relocates the classic UI globals (the raw minimap
-    // rect address no longer holds live values), so the badge uses a fixed
-    // game-space spot with env overrides for tuning.
+    // Screen-fixed position: middle-left, just above the lower panel.
+    // bw_print_xy draws in SCREEN coordinates (see nydus.rs, which subtracts
+    // the camera to convert world->screen); adding the camera here pushed the
+    // badge hundreds of pixels below the viewport, which is why it never
+    // showed. The logical game screen is 640x480; the bottom panel/minimap
+    // strip starts at y=352, so the badge sits at y=320 (32 px above it).
     let badge_x = crate::config::env("CM_PLUS_IDLE_BADGE_X")
         .and_then(|v| v.parse::<i32>().ok())
         .unwrap_or(16);
     let badge_y = crate::config::env("CM_PLUS_IDLE_BADGE_Y")
         .and_then(|v| v.parse::<i32>().ok())
-        .unwrap_or(824);
-    let (cx, cy) = camera();
+        .unwrap_or(320);
     let icon_id = crate::idle_workers::first_idle_icon(local)
         .unwrap_or_else(|| tier1_worker_icon(local as u8));
-    let icon_x = badge_x + cx;
-    let icon_y = badge_y + cy;
+    let icon_x = badge_x;
+    let icon_y = badge_y;
 
     set_font_handle(font);
     write_draw_text(0, 0, 0x7FFF, 0x7FFF);
@@ -369,7 +370,7 @@ unsafe fn draw_idle_counter() {
     let Some((iw, ih)) = crate::icon::draw_unit_icon(icon_id, icon_x, icon_y) else {
         // Icons GRP not loaded yet: text-only fallback at the top-left.
         get_color_handle(if n > 0 { text_color::YELLOW } else { text_color::GREY2 });
-        bw_print_xy(buf.as_ptr(), cx + 4, cy + 24);
+        bw_print_xy(buf.as_ptr(), badge_x + 4, badge_y + 24);
         set_font_handle(core::ptr::null_mut());
         return;
     };

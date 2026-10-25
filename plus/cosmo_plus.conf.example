@@ -1,0 +1,31 @@
+# Cosmonarchy Plus — per-install settings.
+#
+# Copy this file to `cosmo_plus.conf` in the game directory (next to
+# `Cosmonarchy BW.exe`) or in `plugins/`, then edit. Every key must start with
+# `CM_PLUS_`; `#` starts a comment. A value set here overrides the built-in
+# default; environment variables with the same name win over the file.
+
+# Key that selects the next idle worker (bare press only — Ctrl/Alt/Shift +
+# key still reaches the game, and the key is inert in chat and dialogs).
+#
+# Accepts F1-F12, A-Z, 0-9, SPACE, TAB, HOME, END, DELETE, INSERT, PAGEUP,
+# PAGEDOWN, PAUSE, SCROLLLOCK, the punctuation names (COMMA, PERIOD, SLASH,
+# SEMICOLON, APOSTROPHE, LBRACKET, RBRACKET, BACKSLASH, MINUS, EQUALS,
+# BACKTICK), the punctuation character itself (`,`), or a raw virtual-key code
+# in hex (`0x7A`). Default: F9.
+#
+# CM_PLUS_IDLE_WORKER_KEY=,
+
+# Position of the idle-worker badge, in screen pixels. Omit both to anchor it
+# to the minimap panel (just above the terrain button) at any resolution.
+#
+# CM_PLUS_IDLE_BADGE_X=16
+# CM_PLUS_IDLE_BADGE_Y=312
+
+# Overlay label font: `small` (default, FONT_SMALL) or `std` (standard in-game font).
+#
+# CM_PLUS_OVERLAY_FONT=small
+
+# Disable the Tab subgroup cycle.
+#
+# CM_PLUS_NO_TAB_CYCLE=1

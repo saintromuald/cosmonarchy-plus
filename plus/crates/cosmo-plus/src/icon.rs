@@ -48,20 +48,17 @@ struct FxnDrawIconData {
     pixel_data: *const u8,
 }
 
-/// Blit the command-card icon `icon_id` at screen position (x, y). Returns the
-/// frame size, or None when the icons GRP is not loaded yet.
-pub(crate) unsafe fn draw_unit_icon(icon_id: u32, x: i32, y: i32) -> Option<(i32, i32)> {
-    let grp = *(G_CMDICONS_GRP as *const *const GrpHead);
-    if grp.is_null() {
-        return None;
-    }
-    static FIRST: std::sync::Once = std::sync::Once::new();
-    FIRST.call_once(|| {
-        crate::log::log(&format!(
-            "[cosmo-plus] icon: grp={grp:p} frames={} at x={x} y={y}",
-            (*grp).frame_count
-        ));
-    });
+/// A resolved GRP frame: its size, where its pixels start, and the loaded-GRP
+/// quirk flag (see `frame_for`).
+struct Frame {
+    w: i32,
+    h: i32,
+    offset: u32,
+    folded: bool,
+}
+
+/// Resolve the frame `icon_id` inside the loaded command-icon GRP.
+unsafe fn frame_for(grp: *const GrpHead, icon_id: u32) -> Frame {
     let count = (*grp).frame_count as usize;
     let idx = if (icon_id as usize) < count {
         icon_id as usize
@@ -75,16 +72,21 @@ pub(crate) unsafe fn draw_unit_icon(icon_id: u32, x: i32, y: i32) -> Option<(i32
     let mut offset = f.data_offset;
     // Loaded-GRP quirk (same as gptp's statres hook): a set high bit means the
     // offset was folded into a wider row; clear it and widen the frame.
-    if offset & 0x8000_0000 != 0 {
+    let folded = offset & 0x8000_0000 != 0;
+    if folded {
         offset &= 0x7FFF_FFFF;
         w += 256;
     }
-    static FRAME: std::sync::Once = std::sync::Once::new();
-    FRAME.call_once(|| {
-        crate::log::log(&format!(
-            "[cosmo-plus] icon: id={icon_id} idx={idx} w={w} h={h} off={offset:#x}"
-        ));
-    });
+    Frame {
+        w,
+        h,
+        offset,
+        folded,
+    }
+}
+
+/// Blit `w`×`h` indexed pixels at screen position (x, y).
+unsafe fn blit(pixels: *const u8, w: i32, h: i32, x: i32, y: i32) {
     let bounds = Bounds {
         left: 0,
         top: 0,
@@ -96,7 +98,7 @@ pub(crate) unsafe fn draw_unit_icon(icon_id: u32, x: i32, y: i32) -> Option<(i32
     let data = FxnDrawIconData {
         w: w as u16,
         h: h as u16,
-        pixel_data: (grp as *const u8).add(offset as usize),
+        pixel_data: pixels,
     };
     core::arch::asm!(
         "pushad",
@@ -111,5 +113,68 @@ pub(crate) unsafe fn draw_unit_icon(icon_id: u32, x: i32, y: i32) -> Option<(i32
         func = sym PRINT_ICON_ADDR,
         options(nostack),
     );
-    Some((w, h))
+}
+
+/// Blit the command-card icon `icon_id` at screen position (x, y). Returns the
+/// frame size, or None when the icons GRP is not loaded yet.
+#[allow(dead_code)]
+pub(crate) unsafe fn draw_unit_icon(icon_id: u32, x: i32, y: i32) -> Option<(i32, i32)> {
+    let grp = *(G_CMDICONS_GRP as *const *const GrpHead);
+    if grp.is_null() {
+        return None;
+    }
+    static FIRST: std::sync::Once = std::sync::Once::new();
+    FIRST.call_once(|| {
+        crate::log::log(&format!(
+            "[cosmo-plus] icon: grp={grp:p} frames={} at x={x} y={y}",
+            (*grp).frame_count
+        ));
+    });
+    let f = frame_for(grp, icon_id);
+    static FRAME: std::sync::Once = std::sync::Once::new();
+    FRAME.call_once(|| {
+        crate::log::log(&format!(
+            "[cosmo-plus] icon: id={icon_id} w={} h={} off={:#x}",
+            f.w, f.h, f.offset
+        ));
+    });
+    blit((grp as *const u8).add(f.offset as usize), f.w, f.h, x, y);
+    Some((f.w, f.h))
+}
+
+/// Blit the command-card icon `icon_id` scaled (nearest-neighbour) to
+/// `target_w`×`target_h` at screen position (x, y). The HUD badge uses this to
+/// draw a compact icon instead of the full 64×60 command-card frame.
+///
+/// Returns the size actually drawn: the target size on success, the native
+/// frame size when the frame is a folded-row frame (its pixel layout is not a
+/// plain `w`×`h` block, so it is left at native size), or None when the icons
+/// GRP is not loaded yet.
+pub(crate) unsafe fn draw_unit_icon_scaled(
+    icon_id: u32,
+    x: i32,
+    y: i32,
+    target_w: i32,
+    target_h: i32,
+) -> Option<(i32, i32)> {
+    let grp = *(G_CMDICONS_GRP as *const *const GrpHead);
+    if grp.is_null() {
+        return None;
+    }
+    let f = frame_for(grp, icon_id);
+    if f.folded || target_w <= 0 || target_h <= 0 {
+        blit((grp as *const u8).add(f.offset as usize), f.w, f.h, x, y);
+        return Some((f.w, f.h));
+    }
+    let src = (grp as *const u8).add(f.offset as usize);
+    let mut dst = vec![0u8; (target_w * target_h) as usize];
+    for ty in 0..target_h {
+        let sy = ty * f.h / target_h;
+        for tx in 0..target_w {
+            let sx = tx * f.w / target_w;
+            dst[(ty * target_w + tx) as usize] = *src.add((sy * f.w + sx) as usize);
+        }
+    }
+    blit(dst.as_ptr(), target_w, target_h, x, y);
+    Some((target_w, target_h))
 }

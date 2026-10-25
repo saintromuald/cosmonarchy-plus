@@ -275,9 +275,9 @@ unsafe extern "stdcall" fn draw_hook(surface: *mut core::ffi::c_void, bounds: *m
     // Larva picker: fires the selection on a confirmed count, then draws its entry UI.
     crate::larva_pick::poll();
     crate::larva_pick::draw();
-    // Smart Tab: rotate the active subgroup highlight on a fresh Tab press
-    // (the selection itself is never touched).
-    crate::tab_cycle::poll();
+    // Smart Tab: the press is processed in the step hook (tab_cycle::poll in
+    // frame.rs); the draw pass only confirms the engine's UI is aimed at the
+    // active subgroup.
     crate::tab_cycle::apply_display();
     // Tab indicator (drawn regardless of the saturation overlay switch).
     draw_tab_indicator();
@@ -319,9 +319,10 @@ unsafe fn draw_world_annotations() {
     set_font_handle(core::ptr::null_mut());
 }
 
-/// The idle-worker badge (SC2-style), drawn above the minimap on the mid-left:
-/// the first idle worker's command-card icon plus the yellow count, or the
-/// local race's tier-1 worker icon with a grey 0 when everyone is busy.
+/// The idle-worker badge (SC2-style), anchored just above the minimap's
+/// terrain toggle (the stock "Hide Terrain (Tab)" button): the first idle
+/// worker's command-card icon, scaled down to HUD size, plus the yellow count.
+/// With no idle worker it shows the local race's tier-1 worker icon and a grey 0.
 /// Independent of the saturation overlay switch.
 unsafe fn draw_idle_counter() {
     if crate::frame::frame_count() == 0 {
@@ -340,22 +341,26 @@ unsafe fn draw_idle_counter() {
         crate::log::log(&format!("[cosmo-plus] idle counter: first draw n={n}"));
     });
 
-    // Screen-fixed position: middle-left, just above the lower panel.
-    // bw_print_xy draws in SCREEN coordinates (see nydus.rs, which subtracts
-    // the camera to convert world->screen); adding the camera here pushed the
-    // badge hundreds of pixels below the viewport, which is why it never
-    // showed. The logical game screen is 640x480; the bottom panel/minimap
-    // strip starts at y=352, so the badge sits at y=320 (32 px above it).
-    let badge_x = crate::config::env("CM_PLUS_IDLE_BADGE_X")
+    // Anchored to the minimap panel so it tracks the UI at any resolution:
+    // left edge aligned with the terrain button, bottom edge just above the
+    // panel's button strip. The draw hook runs with the world surface current,
+    // so screen-fixed elements are expressed as `screen + camera` — the same
+    // convention as the minimap labels in `nydus.rs`. Without the camera the
+    // badge was pinned to a world position and scrolled away with the view.
+    let rect = *(crate::nydus::G_MINIMAP_RECT as *const [i32; 4]);
+    let (cx, cy) = camera();
+    const ICON_W: i32 = 24;
+    const ICON_H: i32 = 22;
+    let screen_x = crate::config::env("CM_PLUS_IDLE_BADGE_X")
         .and_then(|v| v.parse::<i32>().ok())
-        .unwrap_or(16);
-    let badge_y = crate::config::env("CM_PLUS_IDLE_BADGE_Y")
+        .unwrap_or(rect[0] + 12);
+    let screen_y = crate::config::env("CM_PLUS_IDLE_BADGE_Y")
         .and_then(|v| v.parse::<i32>().ok())
-        .unwrap_or(320);
+        .unwrap_or(rect[1] - 22 - ICON_H);
+    let icon_x = screen_x + cx;
+    let icon_y = screen_y + cy;
     let icon_id = crate::idle_workers::first_idle_icon(local)
         .unwrap_or_else(|| tier1_worker_icon(local as u8));
-    let icon_x = badge_x;
-    let icon_y = badge_y;
 
     set_font_handle(font);
     write_draw_text(0, 0, 0x7FFF, 0x7FFF);
@@ -364,24 +369,29 @@ unsafe fn draw_idle_counter() {
     let mut buf = [0u8; 16];
     buf.fill(0);
     let label = format!("Idle: {n}");
-    let len = label.len().min(buf.len());
+    let len = label.len().min(buf.len() - 1);
     buf[..len].copy_from_slice(&label.as_bytes()[..len]);
 
-    let Some((iw, ih)) = crate::icon::draw_unit_icon(icon_id, icon_x, icon_y) else {
-        // Icons GRP not loaded yet: text-only fallback at the top-left.
+    let Some((iw, ih)) = crate::icon::draw_unit_icon_scaled(icon_id, icon_x, icon_y, ICON_W, ICON_H)
+    else {
+        // Icons GRP not loaded yet: text-only fallback above the minimap.
         get_color_handle(if n > 0 { text_color::YELLOW } else { text_color::GREY2 });
-        bw_print_xy(buf.as_ptr(), badge_x + 4, badge_y + 24);
+        bw_print_xy(buf.as_ptr(), screen_x + cx, screen_y + cy);
         set_font_handle(core::ptr::null_mut());
         return;
     };
 
-    // Drop shadow for contrast, then the count right of the icon.
-    let text_x = icon_x + iw + 8;
+    // Count right of the icon, vertically centred, with a drop shadow.
+    let mut count_buf = [0u8; 8];
+    let count = format!("{n}");
+    let clen = count.len().min(count_buf.len() - 1);
+    count_buf[..clen].copy_from_slice(&count.as_bytes()[..clen]);
+    let text_x = icon_x + iw + 4;
     let text_y = icon_y + (ih - 8) / 2;
     get_color_handle(text_color::BLACK);
-    bw_print_xy(buf.as_ptr(), text_x + 1, text_y + 1);
+    bw_print_xy(count_buf.as_ptr(), text_x + 1, text_y + 1);
     get_color_handle(if n > 0 { text_color::YELLOW } else { text_color::GREY2 });
-    bw_print_xy(buf.as_ptr(), text_x, text_y);
+    bw_print_xy(count_buf.as_ptr(), text_x, text_y);
     set_font_handle(core::ptr::null_mut());
 }
 

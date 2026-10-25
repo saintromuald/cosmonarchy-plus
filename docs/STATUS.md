@@ -171,10 +171,15 @@ phase lands.
 | `isdbg.qdp` | "Executable patched successfully… Listening for errors" |
 | `fastmenus/mtl/vx4ex/aize_debug.qdp` | loaded with the game; menus navigated, match ran (their effects are in-game UX, exercised by the menu walk + match) |
 
-**Known gap (explicitly reported, previously silent):** the shipped `gptp.qdp` lacks the
-`cosmo_camera_screens` export, so C1-C8 minimap labels disarm on every build; the report
-now says so instead of the feature drawing nothing. Enabling them needs the gptp fork
-build with that export.
+**Camera labels — enabled on the shipped gptp, no rebuild.** The first attempt added a
+`cosmo_camera_screens` export to a fresh gptp.qdp CI build, but that build was associated
+with the game freezing at match start, and gptp exports nothing by design. The labels now
+resolve `hotkeys.screens` by **signature scan** (the same technique as the zoom patch):
+the F1-F8 handler's indexed access carries the array's imm32, which the game relocates
+after plugin install, so it is read lazily at first draw. Verified against live game
+memory (signature @ gptp+0x76f93, imm = loaded screens address); the boot report arms
+`camera-labels` on the shipped build. Fork branches `plus/camera-screens-export` /
+`plus/no-export-control` (both built green in CI) are left for reference.
 
 ## Separation
 

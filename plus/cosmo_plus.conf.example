@@ -17,10 +17,11 @@
 # CM_PLUS_IDLE_WORKER_KEY=,
 
 # Position of the idle-worker badge, in screen pixels. Omit both to anchor it
-# to the minimap panel (just above the terrain button) at any resolution.
+# to the minimap panel (just above the terrain/"Hide Terrain" toggle) at any
+# resolution.
 #
-# CM_PLUS_IDLE_BADGE_X=16
-# CM_PLUS_IDLE_BADGE_Y=312
+# CM_PLUS_IDLE_BADGE_X=18
+# CM_PLUS_IDLE_BADGE_Y=280
 
 # Overlay label font: `small` (default, FONT_SMALL) or `std` (standard in-game font).
 #

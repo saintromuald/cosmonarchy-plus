@@ -2,6 +2,27 @@
 
 use bw_dat::structs::Unit;
 
+/// `helper::move_screen` (0x0049C440) — centers the view on world-px (x, y),
+/// clamped by the engine's scroll limits. Register ABI from `bwhelper.cpp`:
+/// `movzx eax, x; movzx ecx, y; call`.
+const ADDR_MOVE_SCREEN: usize = 0x0049C440;
+
+/// Center the camera on a world-pixel position (the engine clamps to the map).
+pub(crate) unsafe fn move_screen(x: u16, y: u16) {
+    core::arch::asm!(
+        "pushad",
+        "movzx eax, {x:x}",
+        "movzx ecx, {y:x}",
+        "call dword ptr [{func}]",
+        "popad",
+        x = in(reg) x,
+        y = in(reg) y,
+        func = sym ADDR_MOVE_SCREEN_ADDR,
+        options(nostack),
+    );
+}
+static ADDR_MOVE_SCREEN_ADDR: u32 = ADDR_MOVE_SCREEN as u32;
+
 /// The engine's click-selection routine (BW/bwhelper.cpp `select_units_if_alt_not_held`).
 const ADDR_SELECT_UNITS: usize = 0x0046FA00;
 

@@ -134,6 +134,7 @@ pub(crate) fn install_player_zoom_floor() {
     };
     let want = core::encode_mov_imm(percent);
     if current == want {
+        PATCHED.store(true, std::sync::atomic::Ordering::SeqCst);
         crate::log::log(&format!(
             "[cosmo-plus] zoom: player floor already {percent}% @ 0x{:08x}",
             base + site.mov_imm
@@ -151,6 +152,7 @@ pub(crate) fn install_player_zoom_floor() {
     }
     let ok = unsafe { write_mov_imm(base + site.mov_imm, want) };
     if ok {
+        PATCHED.store(true, std::sync::atomic::Ordering::SeqCst);
         crate::log::log(&format!(
             "[cosmo-plus] zoom: player floor {percent}% (witness floor {}%) @ 0x{:08x}; \
              call target 0x{:08x}",

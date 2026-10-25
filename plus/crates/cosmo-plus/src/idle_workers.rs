@@ -318,12 +318,13 @@ pub(crate) unsafe fn poll() {
     let chosen = idle[idx];
     LAST_SELECTED.store(chosen as usize, Ordering::SeqCst);
 
+    let pos = &(*chosen).flingy.position;
     crate::log::log(&format!(
-        "[cosmo-plus] idle workers: selecting 1 of {count} (index {idx})"
+        "[cosmo-plus] idle workers: selecting 1 of {count} (index {idx}) at ({},{})",
+        pos.x, pos.y
     ));
     let list: [*mut bw_dat::structs::Unit; SELECTION_CAP] = [chosen; SELECTION_CAP];
     crate::select::select_units_if_alt_not_held(list.as_ptr(), 1, 1, 1);
     // SC2-F1 behaviour: jump the camera to the worker you just selected.
-    let pos = &(*chosen).flingy.position;
     crate::select::move_screen(pos.x as u16, pos.y as u16);
 }

@@ -7,10 +7,10 @@
 //! line and truncates the file; replies go to `cosmo_plus.repl.log`.
 //!
 //! Commands:
-//!   badge on|off           toggle the idle badge
+//!   badge on|off|default   toggle the idle badge / clear the pin
 //!   badge <x> <y>          pin the badge to a screen position
 //!   icon <id> <x> <y> [w] [h]   draw a command icon (scaled) for 3 s
-//!   text <str> <x> <y> [c]      draw text (color id, default 4 = white) for 3 s
+//!   text <x> <y> [c] <str>   draw text (color id, default 4 = white) for 3 s
 //!   idle                   select the next idle worker (as if the key fired)
 //!   state                  re-verify globals and rewrite the state report
 //!   frame                  report frame/camera/minimap rect
@@ -84,6 +84,10 @@ unsafe fn exec(line: &str) {
                 BADGE_SHOWN.store(false, Ordering::SeqCst);
                 reply("badge hidden");
             }
+            Some("default") => {
+                *BADGE_PIN.lock().unwrap() = None;
+                reply("badge back to the minimap anchor");
+            }
             Some(x) => {
                 let y = parts.next().and_then(parse_i32);
                 match (parse_i32(x), y) {
@@ -91,10 +95,10 @@ unsafe fn exec(line: &str) {
                         *BADGE_PIN.lock().unwrap() = Some((x, y));
                         reply(&format!("badge pinned to ({x},{y})"));
                     }
-                    _ => reply("usage: badge on|off|<x> <y>"),
+                    _ => reply("usage: badge on|off|default|<x> <y>"),
                 }
             }
-            None => reply("usage: badge on|off|<x> <y>"),
+            None => reply("usage: badge on|off|default|<x> <y>"),
         },
         "icon" => {
             let (Some(id), Some(x), Some(y)) = (
@@ -125,14 +129,13 @@ unsafe fn exec(line: &str) {
                 parts.next().and_then(parse_i32),
                 parts.next().and_then(parse_i32),
             ) else {
-                reply("usage: text <string> <x> <y> [color]");
+                reply("usage: text <x> <y> [color] <string>");
                 return;
             };
-            // The string may contain spaces: re-join the remainder minus x,y,color.
             let color = parts.next().and_then(|v| v.parse::<u8>().ok()).unwrap_or(4);
             let text = parts.collect::<Vec<_>>().join(" ");
             if text.is_empty() {
-                reply("usage: text <string> <x> <y> [color]");
+                reply("usage: text <x> <y> [color] <string>");
                 return;
             }
             let mut buf = [0u8; 32];
@@ -170,7 +173,16 @@ unsafe fn exec(line: &str) {
         "units" => {
             let total = crate::frame::unit_count_safe();
             let idle = crate::idle_workers::count_idle(local_player_or_0());
-            reply(&format!("units={total} idle={idle}"));
+            let mut per_player = [0usize; 12];
+            crate::frame::for_each_unit(|u| {
+                let p = (*u).player as usize;
+                if p < 12 {
+                    per_player[p] += 1;
+                }
+            });
+            reply(&format!(
+                "units={total} idle={idle} per_player={per_player:?}"
+            ));
         }
         "reload-config" => {
             let applied = crate::config::load();

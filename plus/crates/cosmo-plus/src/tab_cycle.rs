@@ -502,6 +502,44 @@ pub(crate) unsafe fn poll() {
     ));
 }
 
+impl Cycle {
+    fn reset(&mut self) {
+        self.active = 0;
+        self.groups = 0;
+        self.count = 0;
+        self.active_id = 0;
+        self.active_ptr = 0;
+        self.base_sorted.clear();
+        self.groups_order.clear();
+    }
+}
+
+/// Whether `ptr` is among the units in the engine's client selection right
+/// now (used to end the subgroup cycle once the selection changes). Reads the
+/// table directly — no allocation, safe to run every frame.
+unsafe fn selection_contains(ptr: u32) -> bool {
+    if !resolve_selection() {
+        return false;
+    }
+    let base = SEL_BASE.load(Ordering::SeqCst);
+    if base == 0 {
+        return false;
+    }
+    let limit = SEL_LIMIT.load(Ordering::SeqCst).max(1);
+    let count = (std::ptr::read(CLIENT_SELECTION_COUNT as *const u8) as usize).min(limit);
+    let list = base as *const *mut Unit;
+    for i in 0..count {
+        let unit = *list.add(i);
+        if unit.is_null() {
+            break;
+        }
+        if unit as u32 == ptr {
+            return true;
+        }
+    }
+    false
+}
+
 /// Rotate the engine's client selection array so the run
 /// `[run_start, run_start + run_len)` is first. Reads the whole selection,
 /// then writes it back rotated; the count is untouched.
@@ -533,9 +571,19 @@ unsafe fn rotate_selection(run_start: usize, run_len: usize, count: usize) -> bo
 /// re-derives the wireframe, stats panel and command buttons from it on its
 /// own; the write is a belt-and-braces nudge for engine paths that only
 /// refresh `g_active_portrait_unit` on selection-change events.
+///
+/// The write is guarded by a membership check: the cycle only applies while
+/// its unit is still in the current selection. Without the guard, selecting
+/// anything else (or the unit dying) leaves the stale portrait write running
+/// every frame, the command card keeps aiming at the old unit and its
+/// abilities stop working.
 pub(crate) unsafe fn apply_display() {
-    let cycle = CYCLE.lock().unwrap();
+    let mut cycle = CYCLE.lock().unwrap();
     if cycle.groups < 2 || cycle.active_ptr == 0 {
+        return;
+    }
+    if !selection_contains(cycle.active_ptr) {
+        cycle.reset();
         return;
     }
     std::ptr::write(G_ACTIVE_PORTRAIT_UNIT as *mut u32, cycle.active_ptr);

@@ -417,12 +417,12 @@ unsafe fn draw_idle_counter() {
     write_draw_text(0, 0, 0x7FFF, 0x7FFF);
     *(G_PRINT_XY_ALIGNMENT as *mut u8) = 0x11;
 
-    // Count first, icon last: the text path is the one that has always
-    // rendered on this surface, so the number is never lost if the engine's
-    // icon blit misbehaves. Shadow, then the count in yellow (grey at 0).
-    let mut buf = [0u8; 8];
+    // Text first, icon last: the text path is the one that has always
+    // rendered on this surface, so the label is never lost if the engine's
+    // icon blit misbehaves. Shadow, then "Idle: N" in yellow (grey at 0).
+    let mut buf = [0u8; 16];
     buf.fill(0);
-    let label = format!("{n}");
+    let label = format!("Idle: {n}");
     let len = label.len().min(buf.len() - 1);
     buf[..len].copy_from_slice(&label.as_bytes()[..len]);
     let text_x = screen_x + ICON_W + 4;
@@ -432,6 +432,8 @@ unsafe fn draw_idle_counter() {
     get_color_handle(if n > 0 { text_color::YELLOW } else { text_color::GREY2 });
     bw_print_xy(buf.as_ptr(), text_x, text_y);
 
+    // Icon last: the label above is already drawn, so a failed icon blit
+    // (icons GRP not loaded yet) just leaves the text-only badge.
     let icon_id = crate::idle_workers::first_idle_icon(local)
         .unwrap_or_else(|| tier1_worker_icon(local as u8));
     let _ = crate::icon::draw_unit_icon_scaled(icon_id, screen_x, screen_y, ICON_W, ICON_H);

@@ -105,6 +105,31 @@ phase lands.
   overrides) and rollback pool relocation all still work on the widescreen build. See
   `docs/zoom-floor.md`.
 
+## 5. Idle-worker hotkey + badge — DONE (hook capture, configurable key, HUD badge)
+
+- **Why F9 never fired:** the first build polled `GetAsyncKeyState` from the draw pass. The
+  game's own hotkey layer consumes function keys before that poll sees a tap, so the press
+  never reached the plugin (`cosmo_plus.log` had the install line but no `selecting` line).
+  The key is now captured by a thread `WH_KEYBOARD` hook — the same mechanism that already
+  works for Tab subgroup cycling — which queues the press and lets the draw pass do the
+  selection (still rollback-safe: no selection during re-simulation).
+- **Configurable key:** `CM_PLUS_IDLE_WORKER_KEY` in `cosmo_plus.conf`. `parse_key` now
+  accepts the punctuation keys by character (`,`) or name (`COMMA`, `PERIOD`, `SLASH`, …)
+  in addition to F1–F12, letters, digits and hex VK codes. The key is swallowed in-game, so
+  a control group bound to it no longer fires; Ctrl/Alt/Shift + key is left to the game, and
+  the hook is inert in chat and modal dialogs. One press selects one idle worker, the next
+  press selects the next (SC2-F1 style).
+- **Badge:** anchored to the live minimap rect (just above the terrain/"Hide Terrain (Tab)"
+  button, left edge aligned with it) instead of a hard-coded screen spot, and drawn as
+  `screen + camera` like the minimap labels — the previous build drew at raw world
+  coordinates, so the badge scrolled with the view. The command-card icon is
+  nearest-neighbour scaled to 24×22 (was the full 64×60 frame) and the count uses the small
+  font. `CM_PLUS_IDLE_BADGE_X/Y` still override the position.
+- **Verified:** `cosmo_plus.conf` armed (`armed from cosmo_plus.conf: 1 setting(s)`),
+  `idle workers: hotkey , (VK 0xBC)`, `keyboard hook installed`, and the minimap rect read
+  live from the running game (`6,348,133,475`) puts the badge at screen `18,304` — above
+  the panel at every camera position.
+
 ## Separation
 
 - `netcode/` untouched by all of the above.

@@ -16,8 +16,10 @@ pub const DEFAULT_TAB_KEY: &str = "TAB";
 
 /// Parse a hotkey name into a virtual-key code.
 ///
-/// Accepts `F1`–`F12`, single letters/digits, `SPACE`/`TAB`/`HOME`/`END`/`DELETE`/
-/// `INSERT`/`PAGEUP`/`PAGEDOWN`, or a raw virtual-key code in hex (`0x7A`).
+/// Accepts `F1`–`F12`, single letters/digits, the punctuation keys (either the
+/// character itself, e.g. `,` or `.`, or its name, e.g. `COMMA`), `SPACE`/`TAB`/
+/// `HOME`/`END`/`DELETE`/`INSERT`/`PAGEUP`/`PAGEDOWN`, or a raw virtual-key code
+/// in hex (`0x7A`).
 pub fn parse_key(name: &str) -> Option<u16> {
     let n = name.trim();
     if n.is_empty() {
@@ -44,6 +46,12 @@ pub fn parse_key(name: &str) -> Option<u16> {
             return Some(v);
         }
     }
+    // Punctuation: the character itself (`CM_PLUS_IDLE_WORKER_KEY=,`) or its name.
+    if b.len() == 1 {
+        if let Some(vk) = oem_key(b[0]) {
+            return Some(vk);
+        }
+    }
     Some(match upper.as_str() {
         "SPACE" => 0x20,
         "TAB" => 0x09,
@@ -55,6 +63,35 @@ pub fn parse_key(name: &str) -> Option<u16> {
         "PAGEDOWN" => 0x22,
         "PAUSE" | "BREAK" => 0x13,
         "SCROLLLOCK" | "SCROLL" => 0x91,
+        "COMMA" => 0xBC,
+        "PERIOD" | "DOT" => 0xBE,
+        "SLASH" => 0xBF,
+        "SEMICOLON" => 0xBA,
+        "APOSTROPHE" | "QUOTE" => 0xDE,
+        "LBRACKET" | "LEFTBRACKET" => 0xDB,
+        "RBRACKET" | "RIGHTBRACKET" => 0xDD,
+        "BACKSLASH" => 0xDC,
+        "MINUS" => 0xBD,
+        "EQUALS" | "PLUS" => 0xBB,
+        "BACKTICK" | "GRAVE" | "TILDE" => 0xC0,
+        _ => return None,
+    })
+}
+
+/// US-layout OEM virtual-key codes for the printable punctuation keys.
+fn oem_key(c: u8) -> Option<u16> {
+    Some(match c {
+        b',' => 0xBC,
+        b'.' => 0xBE,
+        b'/' => 0xBF,
+        b';' => 0xBA,
+        b'\'' => 0xDE,
+        b'[' => 0xDB,
+        b']' => 0xDD,
+        b'\\' => 0xDC,
+        b'-' => 0xBD,
+        b'=' => 0xBB,
+        b'`' => 0xC0,
         _ => return None,
     })
 }
@@ -76,6 +113,19 @@ mod tests {
         assert_eq!(parse_key("0x7A"), Some(0x7A));
         assert_eq!(parse_key("Pause"), Some(0x13));
         assert_eq!(parse_key("scrolllock"), Some(0x91));
+        assert_eq!(parse_key(","), Some(0xBC));
+        assert_eq!(parse_key("COMMA"), Some(0xBC));
+        assert_eq!(parse_key("."), Some(0xBE));
+        assert_eq!(parse_key("PERIOD"), Some(0xBE));
+        assert_eq!(parse_key(";"), Some(0xBA));
+        assert_eq!(parse_key("/"), Some(0xBF));
+        assert_eq!(parse_key("["), Some(0xDB));
+        assert_eq!(parse_key("]"), Some(0xDD));
+        assert_eq!(parse_key("'"), Some(0xDE));
+        assert_eq!(parse_key("-"), Some(0xBD));
+        assert_eq!(parse_key("="), Some(0xBB));
+        assert_eq!(parse_key("`"), Some(0xC0));
+        assert_eq!(parse_key("\\"), Some(0xDC));
         assert_eq!(parse_key(""), None);
         assert_eq!(parse_key("F13"), None);
         assert_eq!(parse_key("CTRL"), None);

@@ -231,6 +231,7 @@ fn install_hook() {
         crate::log::log(
             "[cosmo-plus] tab cycle: keyboard hook installed (Tab is swallowed in-game)",
         );
+        crate::state::hook("keyboard:tab-cycle", h as usize, 0, 0);
         *HOOK.lock().unwrap() = Some(h as isize);
     }
 }

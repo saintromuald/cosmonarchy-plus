@@ -122,6 +122,7 @@ fn install_hook() {
         }
         crate::log::log("[cosmo-plus] larva pick: keyboard hook installed (digits are \
                          consumed while entering a count)");
+        crate::state::hook("keyboard:larva-pick", h as usize, 0, 0);
         *HOOK.lock().unwrap() = Some(h as isize);
     }
 }

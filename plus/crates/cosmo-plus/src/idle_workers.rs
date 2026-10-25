@@ -323,4 +323,7 @@ pub(crate) unsafe fn poll() {
     ));
     let list: [*mut bw_dat::structs::Unit; SELECTION_CAP] = [chosen; SELECTION_CAP];
     crate::select::select_units_if_alt_not_held(list.as_ptr(), 1, 1, 1);
+    // SC2-F1 behaviour: jump the camera to the worker you just selected.
+    let pos = &(*chosen).flingy.position;
+    crate::select::move_screen(pos.x as u16, pos.y as u16);
 }

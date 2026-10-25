@@ -23,17 +23,38 @@ const CAMERA_CAP: usize = 8;
 ///   push dword [ecx*4 + hotkeys.screens]
 /// The imm32 at offset 22 is the absolute VA of `hotkeys.screens` at the
 /// image's preferred base (0x10000000). Verified against the shipped build.
-const SCREENS_SIG: &[u8] = &[
-    0x8D, 0x41, 0x90, // lea eax,[ecx-0x70]
-    0x83, 0xF8, 0x07, // cmp eax,0x7
-    0x77, 0x47, // ja done
-    0x80, 0x7E, 0x0D, 0x00, // cmp byte [esi+0xd],0  (control held)
-    0x75, 0x1B, // jne save-branch
-    0x80, 0x7E, 0x0E, 0x00, // cmp byte [esi+0xe],0  (shift held)
-    0x75, 0x15, // jne save-branch
-    0xFF, 0x34, 0x8D, // push dword [ecx*4 + imm32]
+/// Signatures of the F1-F8 handler, one per known gptp build; each entry is
+/// (pattern, imm32 offset). The fork build uses a short `ja`; the upstream
+/// prerelease build uses a near `ja` (`0f 87 rel32`) with different jne
+/// displacements, so the same source compiles to two byte patterns.
+const SCREENS_SIGS: &[(&[u8], usize)] = &[
+    (
+        &[
+            0x8D, 0x41, 0x90, // lea eax,[ecx-0x70]
+            0x83, 0xF8, 0x07, // cmp eax,0x7
+            0x77, 0x47, // ja done (short)
+            0x80, 0x7E, 0x0D, 0x00, // cmp byte [esi+0xd],0  (control held)
+            0x75, 0x1B, // jne save-branch
+            0x80, 0x7E, 0x0E, 0x00, // cmp byte [esi+0xe],0  (shift held)
+            0x75, 0x15, // jne save-branch
+            0xFF, 0x34, 0x8D, // push dword [ecx*4 + imm32]
+        ],
+        23,
+    ),
+    (
+        &[
+            0x8D, 0x41, 0x90, // lea eax,[ecx-0x70]
+            0x83, 0xF8, 0x07, // cmp eax,0x7
+            0x0F, 0x87, 0xA0, 0x00, 0x00, 0x00, // ja done (near)
+            0x80, 0x7E, 0x0D, 0x00, // cmp byte [esi+0xd],0  (control held)
+            0x75, 0x71, // jne save-branch
+            0x80, 0x7E, 0x0E, 0x00, // cmp byte [esi+0xe],0  (shift held)
+            0x75, 0x6B, // jne save-branch
+            0xFF, 0x34, 0x8D, // push dword [ecx*4 + imm32]
+        ],
+        27,
+    ),
 ];
-const SCREENS_IMM_OFF: usize = 23;
 const GPTP_PREFERRED_BASE: u32 = 0x1000_0000;
 
 /// Resolved status for the boot report.
@@ -47,7 +68,7 @@ pub(crate) fn status() -> String {
     }
 }
 
-static SCREENS_SIG_OFF: OnceLock<Option<usize>> = OnceLock::new();
+static SCREENS_SIG_OFF: OnceLock<Option<(usize, usize)>> = OnceLock::new();
 /// The live screens address, resolved at first draw (relocations happen after install).
 static SCREENS_ADDR: OnceLock<Option<usize>> = OnceLock::new();
 
@@ -60,8 +81,15 @@ pub(crate) fn install() {
             crate::log::log("[cosmo-plus] camera labels: gptp.qdp not loaded");
             return None;
         };
-        let Some(off) = crate::state::scan(base, size, SCREENS_SIG, &[b'x'; SCREENS_SIG.len()])
-        else {
+        let mut found: Option<(usize, usize)> = None; // (match offset, imm offset)
+        for (sig, imm_off) in SCREENS_SIGS {
+            let mask = vec![b'x'; sig.len()];
+            if let Some(off) = crate::state::scan(base, size, sig, &mask) {
+                found = Some((off - base, *imm_off));
+                break;
+            }
+        }
+        let Some((sig_off, imm_off)) = found else {
             crate::log::log(
                 "[cosmo-plus] camera labels: camera-screen signature not found in gptp.qdp; \
                  C1-C8 minimap labels disabled (different gptp build?)",
@@ -69,11 +97,10 @@ pub(crate) fn install() {
             return None;
         };
         crate::log::log(&format!(
-            "[cosmo-plus] camera labels: camera-screen handler found @ +0x{:X} \
+            "[cosmo-plus] camera labels: camera-screen handler found @ +0x{sig_off:X} \
              (screens resolved lazily at first draw)",
-            off - base,
         ));
-        Some(off - base)
+        Some((sig_off, imm_off))
     });
 }
 
@@ -81,13 +108,13 @@ pub(crate) fn install() {
 /// imm is rewritten to the loaded address once the game relocates gptp, so
 /// this runs at first draw, not at install.
 unsafe fn resolve_screens_live() -> Option<usize> {
-    let Some(Some(sig_off)) = SCREENS_SIG_OFF.get().copied() else {
+    let Some(Some((sig_off, imm_off))) = SCREENS_SIG_OFF.get().copied() else {
         return None;
     };
     let Some((base, size)) = crate::zoom::gptp_module() else {
         return None;
     };
-    let imm = std::ptr::read_unaligned((base + sig_off + SCREENS_IMM_OFF) as *const u32) as usize;
+    let imm = std::ptr::read_unaligned((base + sig_off + imm_off) as *const u32) as usize;
     // Prefer the live (relocated) address; fall back to the preferred-base
     // value when the game has not relocated yet.
     let target = if imm >= base && imm < base + size {

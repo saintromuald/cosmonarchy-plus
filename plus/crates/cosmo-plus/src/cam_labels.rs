@@ -1,58 +1,109 @@
 //! C1–C8 camera hotkey labels on the minimap.
 //!
 //! gptp's extended camera hotkeys (F1–F8; save with Ctrl/Shift+F) keep eight
-//! camera positions. The fork exports them through `cosmo_camera_screens`
-//! (CameraCap × v2u16 of world px), and this module draws a small centred
-//! label — C1..C8 — at each position on the minimap, so the player sees at a
-//! glance which key jumps where. Nothing is drawn when the export is missing
-//! (older gptp build) or outside a game.
+//! camera positions in the `Hotkeys` global (`v2u16 screens[8]`, world px).
+//! gptp.qdp exports nothing — adding a `__declspec(dllexport)` to it makes the
+//! game's plugin loader misbehave (the game froze at match start with an
+//! export build, verified empirically) — so the screens array is resolved by
+//! **signature scan**, the same technique `zoom.rs` uses for its patch site:
+//! the F1–F8 handler's indexed access carries the absolute (preferred-base)
+//! VA of `hotkeys.screens` as an imm32.
+//!
+//! Nothing is drawn when the signature is missing (different gptp build — the
+//! feature disarms loudly, and the boot report says so) or outside a game.
 
 use std::sync::OnceLock;
-
-/// The gptp export name. `const` C-string.
-const EXPORT_NAME: &[u8] = b"cosmo_camera_screens\0";
-/// gptp's module name as it loads in the game.
-const GPTp_MODULE: &[u8] = b"gptp.qdp\0";
 
 /// `CameraCap` in the fork (F1..F8).
 const CAMERA_CAP: usize = 8;
 
-/// Resolved export (pointer into gptp.qdp), set once at install.
+/// The F1–F8 handler in the fork's `handle_key_event` (x86, MSVC):
+///   lea eax,[ecx-0x70]; cmp eax,7; ja done;
+///   cmp [esi+0xd],0 (control); cmp [esi+0xe],0 (shift);
+///   push dword [ecx*4 + hotkeys.screens]
+/// The imm32 at offset 22 is the absolute VA of `hotkeys.screens` at the
+/// image's preferred base (0x10000000). Verified against the shipped build.
+const SCREENS_SIG: &[u8] = &[
+    0x8D, 0x41, 0x90, // lea eax,[ecx-0x70]
+    0x83, 0xF8, 0x07, // cmp eax,0x7
+    0x77, 0x47, // ja done
+    0x80, 0x7E, 0x0D, 0x00, // cmp byte [esi+0xd],0  (control held)
+    0x75, 0x1B, // jne save-branch
+    0x80, 0x7E, 0x0E, 0x00, // cmp byte [esi+0xe],0  (shift held)
+    0x75, 0x15, // jne save-branch
+    0xFF, 0x34, 0x8D, // push dword [ecx*4 + imm32]
+];
+const SCREENS_IMM_OFF: usize = 23;
+const GPTP_PREFERRED_BASE: u32 = 0x1000_0000;
+
 /// Resolved status for the boot report.
 pub(crate) fn status() -> String {
-    match SCREENS_FN.get().copied().flatten() {
-        Some(_) => "armed (C1-C8 minimap labels)".to_string(),
-        None => "disabled (gptp lacks cosmo_camera_screens)".to_string(),
+    match SCREENS_ADDR.get().copied().flatten() {
+        Some(addr) => format!("armed (C1-C8 minimap labels @ 0x{addr:08X})"),
+        None => match SCREENS_SIG_OFF.get().copied().flatten() {
+            Some(_) => "armed (signature found; address resolves at first draw)".to_string(),
+            None => "disabled (camera-screen signature not found in gptp.qdp)".to_string(),
+        },
     }
 }
 
-static SCREENS_FN: OnceLock<Option<unsafe extern "system" fn() -> *const u16>> =
-    OnceLock::new();
+static SCREENS_SIG_OFF: OnceLock<Option<usize>> = OnceLock::new();
+/// The live screens address, resolved at first draw (relocations happen after install).
+static SCREENS_ADDR: OnceLock<Option<usize>> = OnceLock::new();
 
-/// Resolve the gptp export once and log the result.
+/// Scan gptp.qdp for the camera-screen handler once; the screens *address*
+/// itself is resolved lazily at first draw, because the game relocates gptp's
+/// immediates after plugin install (the boot-time value is not the live one).
 pub(crate) fn install() {
-    let _ = SCREENS_FN.get_or_init(|| unsafe {
-        use windows_sys::Win32::System::LibraryLoader::{GetModuleHandleA, GetProcAddress};
-        let module = GetModuleHandleA(GPTp_MODULE.as_ptr() as *const u8);
-        if module.is_null() {
+    let _ = SCREENS_SIG_OFF.get_or_init(|| unsafe {
+        let Some((base, size)) = crate::zoom::gptp_module() else {
             crate::log::log("[cosmo-plus] camera labels: gptp.qdp not loaded");
             return None;
-        }
-        let proc = GetProcAddress(module, EXPORT_NAME.as_ptr() as *const u8);
-        if proc.is_none() {
+        };
+        let Some(off) = crate::state::scan(base, size, SCREENS_SIG, &[b'x'; SCREENS_SIG.len()])
+        else {
             crate::log::log(
-                "[cosmo-plus] camera labels: gptp build lacks cosmo_camera_screens; \
-                 C1-C8 minimap labels disabled (rebuild gptp to enable)",
+                "[cosmo-plus] camera labels: camera-screen signature not found in gptp.qdp; \
+                 C1-C8 minimap labels disabled (different gptp build?)",
             );
             return None;
-        }
-        let raw = proc.unwrap() as usize as *mut core::ffi::c_void;
-        crate::log::log("[cosmo-plus] camera labels: C1-C8 minimap labels enabled");
-        Some(core::mem::transmute::<
-            *mut core::ffi::c_void,
-            unsafe extern "system" fn() -> *const u16,
-        >(raw))
+        };
+        crate::log::log(&format!(
+            "[cosmo-plus] camera labels: camera-screen handler found @ +0x{:X} \
+             (screens resolved lazily at first draw)",
+            off - base,
+        ));
+        Some(off - base)
     });
+}
+
+/// Resolve `hotkeys.screens` from the live imm32 at the signature site. The
+/// imm is rewritten to the loaded address once the game relocates gptp, so
+/// this runs at first draw, not at install.
+unsafe fn resolve_screens_live() -> Option<usize> {
+    let Some(Some(sig_off)) = SCREENS_SIG_OFF.get().copied() else {
+        return None;
+    };
+    let Some((base, size)) = crate::zoom::gptp_module() else {
+        return None;
+    };
+    let imm = std::ptr::read_unaligned((base + sig_off + SCREENS_IMM_OFF) as *const u32) as usize;
+    // Prefer the live (relocated) address; fall back to the preferred-base
+    // value when the game has not relocated yet.
+    let target = if imm >= base && imm < base + size {
+        imm
+    } else {
+        (base as u32)
+            .wrapping_add(imm.wrapping_sub(GPTP_PREFERRED_BASE as usize) as u32)
+            as usize
+    };
+    if target < base || target >= base + size {
+        crate::log::log(&format!(
+            "[cosmo-plus] camera labels: screens imm {imm:#010x} resolves outside gptp.qdp; disabled"
+        ));
+        return None;
+    }
+    Some(target)
 }
 
 /// Draw the C1–C8 labels onto the minimap. Called from the overlay draw pass
@@ -61,13 +112,11 @@ pub(crate) unsafe fn draw_minimap(buf: &mut [u8; 16]) {
     if crate::frame::frame_count() == 0 {
         return;
     }
-    let Some(Some(screens_fn)) = SCREENS_FN.get().copied() else {
+    let resolved = SCREENS_ADDR.get_or_init(|| unsafe { resolve_screens_live() });
+    let Some(addr) = *resolved else {
         return;
     };
-    let screens = screens_fn();
-    if screens.is_null() {
-        return;
-    }
+    let screens = addr as *const u16;
 
     let rect = *(crate::nydus::G_MINIMAP_RECT as *const [i32; 4]);
     let (left, top, right, bottom) = (rect[0], rect[1], rect[2], rect[3]);
@@ -84,6 +133,14 @@ pub(crate) unsafe fn draw_minimap(buf: &mut [u8; 16]) {
         let y = *screens.add(i * 2 + 1) as i32;
         if x == 0 && y == 0 {
             continue; // never saved
+        }
+        // Reject implausible saves (they would project off the minimap).
+        if x < 0
+            || y < 0
+            || x as i64 >= map_w as i64 * crate::nydus::PX_PER_TILE as i64 * 2
+            || y as i64 >= map_h as i64 * crate::nydus::PX_PER_TILE as i64 * 2
+        {
+            continue;
         }
         let mx = left + x / crate::nydus::PX_PER_TILE * (right - left) / map_w;
         let my = top + y / crate::nydus::PX_PER_TILE * (bottom - top) / map_h;

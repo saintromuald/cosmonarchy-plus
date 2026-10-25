@@ -69,11 +69,11 @@ unsafe extern "C" fn tick() {
         crate::antimeta::on_game_tick();
         crate::draft::on_game_tick();
         crate::ultraload::on_game_tick();
-        // Subgroup Tab: process the press in the step hook (not the draw
-        // pass), so the selection rotation works even when the draw hook's
-        // callbacks are not running (headless/Xvfb test runs). The rotation
-        // itself is sim-neutral; only the local selection table is touched.
-        crate::tab_cycle::poll();
+        // NOTE: the subgroup Tab press is deliberately NOT processed here.
+        // The rotation + command-card refresh are UI work and must run in the
+        // draw pass; running update_selected_unit_data inside the simulation
+        // step corrupts the command card (the hotkeyed group lost every
+        // ability). See tab_cycle.rs.
         crate::crash::note_tick();
         if measure_enabled() {
             measure_tick();

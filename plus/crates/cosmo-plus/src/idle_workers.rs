@@ -36,19 +36,13 @@ use std::sync::atomic::{AtomicBool, AtomicU16, AtomicUsize, Ordering};
 use std::sync::Mutex;
 
 use cosmo_plus_core::hotkeys::{parse_key, DEFAULT_IDLE_WORKER_KEY};
-use cosmo_plus_core::saturation::worker_tier;
+use cosmo_plus_core::idle::{is_idle_worker, UnitView};
 
 use windows_sys::Win32::System::Threading::GetCurrentThreadId;
 use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
     GetAsyncKeyState, VK_CONTROL, VK_MENU, VK_SHIFT,
 };
 use windows_sys::Win32::UI::WindowsAndMessaging::{SetWindowsHookExW, WH_KEYBOARD};
-
-/// Orders a jobless worker can hold while parked: the game parks workers on
-/// `Stop` (0x01), `Guard` (0x02) and `PlayerGuard` (0x03).
-const ORDER_STOP: u8 = 0x01;
-const ORDER_GUARD: u8 = 0x02;
-const ORDER_PLAYER_GUARD: u8 = 0x03;
 
 /// `g_chat_message_type` — non-null/!= 0 while the chat line is open.
 const CHAT_MESSAGE_TYPE: usize = 0x0068C144;
@@ -60,25 +54,36 @@ const SELECTION_CAP: usize = 12;
 /// Most idle workers tracked for cycling (well above any real army of workers).
 const MAX_IDLE: usize = 64;
 
-/// A worker is idle when it is completed, carries nothing, is not mid-harvest,
-/// is standing still, and either has no harvest link or sits on a parked order.
-fn worker_is_idle(u: &bw_dat::structs::Unit) -> bool {
-    if u.remaining_build_time != 0 {
-        return false;
+/// The engine adapter for the core's [`UnitView`] (a local wrapper, because the
+/// orphan rule forbids implementing the core trait for `bw_dat`'s type here).
+struct View<'a>(&'a bw_dat::structs::Unit);
+
+impl UnitView for View<'_> {
+    fn unit_id(&self) -> u16 {
+        self.0.unit_id
     }
-    let w = unsafe { &u.unit_specific.worker };
-    if w.carried_resource_count != 0 || w.is_harvesting != 0 {
-        return false;
+    fn player(&self) -> u8 {
+        self.0.player
     }
-    // Moving workers are on their way somewhere; only parked workers count.
-    let f = &u.flingy;
-    if f.current_speed != 0 || f.current_speed_x != 0 || f.current_speed_y != 0 {
-        return false;
+    fn build_time_remaining(&self) -> u16 {
+        self.0.remaining_build_time
     }
-    if w.current_harvest_target.is_null() {
-        return true;
+    fn carried_resources(&self) -> u8 {
+        unsafe { self.0.unit_specific.worker.carried_resource_count }
     }
-    matches!(u.order, ORDER_STOP | ORDER_GUARD | ORDER_PLAYER_GUARD)
+    fn is_harvesting(&self) -> bool {
+        unsafe { self.0.unit_specific.worker.is_harvesting != 0 }
+    }
+    fn is_moving(&self) -> bool {
+        let f = &self.0.flingy;
+        f.current_speed != 0 || f.current_speed_x != 0 || f.current_speed_y != 0
+    }
+    fn has_harvest_target(&self) -> bool {
+        !unsafe { self.0.unit_specific.worker.current_harvest_target }.is_null()
+    }
+    fn order(&self) -> u8 {
+        self.0.order
+    }
 }
 
 /// The local player's idle-worker count (the HUD counter value).
@@ -88,12 +93,10 @@ pub(crate) unsafe fn count_idle(local: u32) -> u32 {
         if (*u).player as u32 != local {
             return;
         }
-        if worker_tier((*u).unit_id).is_none() {
+        if !is_idle_worker(&View(&*u)) {
             return;
         }
-        if worker_is_idle(&*u) {
-            n += 1;
-        }
+        n += 1;
     });
     n
 }
@@ -109,10 +112,7 @@ pub(crate) unsafe fn first_idle_icon(local: u32) -> Option<u32> {
         if (*u).player as u32 != local {
             return;
         }
-        if worker_tier((*u).unit_id).is_none() {
-            return;
-        }
-        if !worker_is_idle(&*u) {
+        if !is_idle_worker(&View(&*u)) {
             return;
         }
         icon = Some(bw_dat::UnitId((*u).unit_id).icon());
@@ -258,10 +258,7 @@ pub(crate) unsafe fn poll() {
         if (*u).player as u32 != local {
             return;
         }
-        if worker_tier((*u).unit_id).is_none() {
-            return;
-        }
-        if !worker_is_idle(&*u) {
+        if !is_idle_worker(&View(&*u)) {
             return;
         }
         idle[count] = u;

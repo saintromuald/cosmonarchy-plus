@@ -314,9 +314,10 @@ unsafe extern "stdcall" fn draw_hook(surface: *mut core::ffi::c_void, bounds: *m
     // Larva picker: fires the selection on a confirmed count, then draws its entry UI.
     crate::larva_pick::poll();
     crate::larva_pick::draw();
-    // Smart Tab: the press is processed in the step hook (tab_cycle::poll in
-    // frame.rs); the draw pass only confirms the engine's UI is aimed at the
-    // active subgroup.
+    // Smart Tab: rotate the selection and rebuild the command card here in
+    // the draw pass (UI-safe), then confirm the engine's UI is aimed at the
+    // active subgroup. Never in the sim step — see frame.rs.
+    crate::tab_cycle::poll();
     crate::tab_cycle::apply_display();
     // Tab indicator (drawn regardless of the saturation overlay switch).
     draw_tab_indicator();
@@ -388,15 +389,9 @@ unsafe fn draw_idle_counter() {
     // panel's button strip. `bw_print_xy`/`bw_print_icon` take SCREEN
     // coordinates on the draw-hook surface (the nydus *world* labels subtract
     // the camera to get here), so the badge is fixed on screen — no camera term.
-    // Validated minimap rect: when the global no longer holds sane values the
-    // badge disarms explicitly instead of drawing off-screen.
-    let Some(rect) = crate::state::minimap_rect() else {
-        static WARNED: std::sync::Once = std::sync::Once::new();
-        WARNED.call_once(|| {
-            crate::log::log("[cosmo-plus] idle badge: minimap rect invalid; badge disabled");
-        });
-        return;
-    };
+    // Validated minimap rect; when the global no longer holds sane values the
+    // badge falls back to a fixed screen spot instead of disappearing.
+    let rect = crate::state::minimap_rect().unwrap_or([6, 348, 133, 475]);
     const ICON_W: i32 = 24;
     const ICON_H: i32 = 22;
     if !crate::repl::badge_shown() {
@@ -408,7 +403,7 @@ unsafe fn draw_idle_counter() {
             .unwrap_or(rect[0] + 12),
         crate::config::env("CM_PLUS_IDLE_BADGE_Y")
             .and_then(|v| v.parse::<i32>().ok())
-            .unwrap_or(rect[1] - 68),
+            .unwrap_or(rect[1] - 66),
     ));
     let screen_x = pin_x;
     let screen_y = pin_y;

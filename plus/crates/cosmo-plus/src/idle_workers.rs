@@ -326,5 +326,13 @@ pub(crate) unsafe fn poll() {
     let list: [*mut bw_dat::structs::Unit; SELECTION_CAP] = [chosen; SELECTION_CAP];
     crate::select::select_units_if_alt_not_held(list.as_ptr(), 1, 1, 1);
     // SC2-F1 behaviour: jump the camera to the worker you just selected.
+    // The gptp build the player runs does not maintain the scroll clamps
+    // (g_move_to_x_max/y_max stay 0), so move_screen would clamp every jump
+    // to the map corner. Derive them from the map size (stock 640x352
+    // viewport) before centering.
+    let map_w = *(crate::nydus::MAP_SIZE_X as *const u16) as i32 * crate::nydus::PX_PER_TILE;
+    let map_h = *(crate::nydus::MAP_SIZE_Y as *const u16) as i32 * crate::nydus::PX_PER_TILE;
+    *(0x00628488 as *mut i32) = (map_w - 640).max(0);
+    *(0x006284B0 as *mut i32) = (map_h - 352).max(0);
     crate::select::move_screen(pos.x as u16, pos.y as u16);
 }

@@ -66,6 +66,11 @@ unsafe extern "C" fn tick() {
         crate::antimeta::on_game_tick();
         crate::draft::on_game_tick();
         crate::ultraload::on_game_tick();
+        // Subgroup Tab: process the press in the step hook (not the draw
+        // pass), so the selection rotation works even when the draw hook's
+        // callbacks are not running (headless/Xvfb test runs). The rotation
+        // itself is sim-neutral; only the local selection table is touched.
+        crate::tab_cycle::poll();
         crate::crash::note_tick();
         if measure_enabled() {
             measure_tick();

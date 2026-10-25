@@ -320,10 +320,11 @@ unsafe fn read_selection() -> Option<(Vec<u16>, Vec<u32>)> {
 }
 
 /// `CM_PLUS_TAB_SELFTEST=1`: build a synthetic mixed selection from the local
-/// player's units (up to 24, in unit-table order — workers and buildings both, so
-/// the list has 2+ subgroups whenever the player owns both) and feed it through the
-/// normal advance path. Diagnostic only; exists so the cycle can be exercised
-/// headlessly without a naturally mixed selection on the map.
+/// player's units (up to `EXTENDED_LIMIT`, in unit-table order — workers and
+/// buildings both, so the list has 2+ subgroups whenever the player owns both)
+/// and feed it through the normal advance path. Diagnostic only; exists so the
+/// cycle can be exercised headlessly without a naturally mixed selection on the
+/// map.
 unsafe fn selftest_selection() -> Option<(Vec<u16>, Vec<u32>)> {
     let Some(local) = crate::idle_workers::local_player() else {
         return None;
@@ -331,7 +332,7 @@ unsafe fn selftest_selection() -> Option<(Vec<u16>, Vec<u32>)> {
     let mut ids: Vec<u16> = Vec::new();
     let mut ptrs: Vec<u32> = Vec::new();
     crate::frame::for_each_unit(|u| {
-        if ptrs.len() >= 24 {
+        if ptrs.len() >= EXTENDED_LIMIT {
             return;
         }
         let unit = &*u;
@@ -347,7 +348,7 @@ unsafe fn selftest_selection() -> Option<(Vec<u16>, Vec<u32>)> {
     crate::log::log(&format!(
         "[cosmo-plus] tab cycle selftest: synthetic selection of {} units, ids {:?}",
         ids.len(),
-        &ids[..ids.len().min(12)]
+        &ids[..ids.len().min(200)]
     ));
     Some((ids, ptrs))
 }
@@ -374,10 +375,19 @@ pub(crate) unsafe fn poll() {
         read_selection()
     };
     let Some((ids, ptrs)) = picked else {
+        if crate::config::env_flag("CM_PLUS_TAB_DEBUG") {
+            crate::log::log("[cosmo-plus] tab cycle debug: press with no readable selection");
+        }
         return;
     };
     let count = ids.len();
     if count < 2 {
+        if crate::config::env_flag("CM_PLUS_TAB_DEBUG") {
+            crate::log::log(&format!(
+                "[cosmo-plus] tab cycle debug: selection count={count} ids={:?} (need 2+ for Tab)",
+                &ids[..count.min(12)],
+            ));
+        }
         return;
     }
 
@@ -421,11 +431,17 @@ pub(crate) unsafe fn poll() {
     }
 
     let groups = runs.len() as u32;
-    // The active subgroup always sits at runs[0]: a fresh selection has its
-    // natural order, and a cycled one was rotated so the active run leads.
-    // Tab moves to runs[1]; Shift+Tab wraps to runs[groups-1].
-    let next_run_index = if dir > 0 { 1 } else { (groups - 1) as usize };
-    let run = &runs[next_run_index];
+    // The group ORDER is fixed at selection time (`groups_order`); the
+    // rotation reorders the array, so the next group must be computed from
+    // that order, not from the rotated runs. The active group always sits
+    // at the front after a rotation; on a fresh selection it is group 0.
+    let next = (cycle.active as i32 + dir).rem_euclid(groups as i32) as usize;
+    let next_id = *cycle.groups_order.get(next).unwrap_or(&runs[0].unit_id);
+    // Locate the next group's run in the CURRENT (possibly rotated) order.
+    let run = runs
+        .iter()
+        .find(|r| r.unit_id == next_id)
+        .unwrap_or(&runs[next.min(runs.len() - 1)]);
 
     if !selftest {
         // Rotate the engine's own selection array: the chosen subgroup first,
@@ -434,13 +450,7 @@ pub(crate) unsafe fn poll() {
         rotate_selection(run.start, run.len, count);
     }
 
-    let group_index = cycle
-        .groups_order
-        .iter()
-        .position(|&id| id == run.unit_id)
-        .unwrap_or(next_run_index) as u32;
-
-    cycle.active = group_index;
+    cycle.active = next as u32;
     cycle.groups = groups;
     cycle.active_id = run.unit_id;
     cycle.active_ptr = ptrs[run.start];
@@ -449,7 +459,7 @@ pub(crate) unsafe fn poll() {
     SHOW_UNTIL_FRAME.store(frame.saturating_add(INDICATOR_FRAMES), Ordering::SeqCst);
     crate::log::log(&format!(
         "[cosmo-plus] tab cycle: active subgroup {}/{} ({} units, id {}, selection[0] now {})",
-        group_index + 1,
+        next + 1,
         groups,
         count,
         run.unit_id,

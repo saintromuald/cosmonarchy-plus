@@ -269,22 +269,6 @@ unsafe extern "stdcall" fn draw_hook(surface: *mut core::ffi::c_void, bounds: *m
     // Draft mode UI (independent of the saturation overlay switch).
     crate::draft::draw_panel();
     crate::draft::poll_pick_input();
-    if crate::config::env_flag("CM_PLUS_IDLE_DEBUG") {
-        use std::sync::atomic::{AtomicU32, Ordering};
-        static CALLS: AtomicU32 = AtomicU32::new(0);
-        let c = CALLS.fetch_add(1, Ordering::SeqCst);
-        if c % 60 == 0 {
-            let b = if bounds.is_null() {
-                [0i32; 4]
-            } else {
-                *(bounds as *const [i32; 4])
-            };
-            crate::log::log(&format!(
-                "[cosmo-plus] draw hook call #{c}: frame={} surface={surface:p} bounds={b:?}",
-                crate::frame::frame_count()
-            ));
-        }
-    }
     // Idle-worker hotkey (also independent of the saturation switch; needs the draw
     // hook, which is installed regardless).
     crate::idle_workers::poll();
@@ -301,7 +285,8 @@ unsafe extern "stdcall" fn draw_hook(surface: *mut core::ffi::c_void, bounds: *m
     draw_capture_confirmation();
     // Idle-worker counter above the minimap (SC2-style; drawn regardless of
     // the overlay switch, like the tab indicator).
-    draw_idle_counter();    // Nydus numbering + C1-C8 camera labels: world annotations that must be
+    draw_idle_counter();
+    // Nydus numbering + C1-C8 camera labels: world annotations that must be
     // visible whenever a game runs, regardless of the saturation overlay
     // switch or of whether the local player has any labelled nodes left.
     draw_world_annotations();
@@ -358,10 +343,9 @@ unsafe fn draw_idle_counter() {
 
     // Anchored to the minimap panel so it tracks the UI at any resolution:
     // left edge aligned with the terrain button, bottom edge just above the
-    // panel's button strip. `bw_print_xy` and `bw_print_icon` draw in SCREEN
+    // panel's button strip. `bw_print_xy`/`bw_print_icon` take SCREEN
     // coordinates on the draw-hook surface (the nydus *world* labels subtract
-    // the camera to get here), so the badge is fixed on screen — no camera
-    // term. Adding one pushed it thousands of pixels off the viewport.
+    // the camera to get here), so the badge is fixed on screen — no camera term.
     let rect = *(crate::nydus::G_MINIMAP_RECT as *const [i32; 4]);
     const ICON_W: i32 = 24;
     const ICON_H: i32 = 22;
@@ -370,64 +354,30 @@ unsafe fn draw_idle_counter() {
         .unwrap_or(rect[0] + 12);
     let screen_y = crate::config::env("CM_PLUS_IDLE_BADGE_Y")
         .and_then(|v| v.parse::<i32>().ok())
-        .unwrap_or(rect[1] - 22 - ICON_H);
-    let icon_x = screen_x;
-    let icon_y = screen_y;
-    if crate::config::env_flag("CM_PLUS_IDLE_DEBUG") {
-        use std::sync::atomic::{AtomicU32, Ordering};
-        static CALLS: AtomicU32 = AtomicU32::new(0);
-        let c = CALLS.fetch_add(1, Ordering::SeqCst);
-        if c % 60 == 0 {
-            crate::log::log(&format!(
-                "[cosmo-plus] idle debug call #{c}: frame={} n={n} rect={rect:?} at=({screen_x},{screen_y}) font={font:p}",
-                crate::frame::frame_count()
-            ));
-        }
-    }
-    let icon_id = crate::idle_workers::first_idle_icon(local)
-        .unwrap_or_else(|| tier1_worker_icon(local as u8));
+        .unwrap_or(rect[1] - 68);
 
     set_font_handle(font);
     write_draw_text(0, 0, 0x7FFF, 0x7FFF);
     *(G_PRINT_XY_ALIGNMENT as *mut u8) = 0x11;
 
-    let mut buf = [0u8; 16];
+    // Count first, icon last: the text path is the one that has always
+    // rendered on this surface, so the number is never lost if the engine's
+    // icon blit misbehaves. Shadow, then the count in yellow (grey at 0).
+    let mut buf = [0u8; 8];
     buf.fill(0);
-    let label = format!("Idle: {n}");
+    let label = format!("{n}");
     let len = label.len().min(buf.len() - 1);
     buf[..len].copy_from_slice(&label.as_bytes()[..len]);
-
-    if crate::config::env_flag("CM_PLUS_IDLE_DEBUG") {
-        // Temporary probe: text only, two known spots, no icon blit.
-        let mut p = [0u8; 8];
-        p[..2].copy_from_slice(b"ZZ");
-        get_color_handle(text_color::WHITE);
-        bw_print_xy(p.as_ptr(), 18, 304);
-        bw_print_xy(p.as_ptr(), 300, 100);
-        set_font_handle(core::ptr::null_mut());
-        return;
-    }
-
-    let Some((iw, ih)) = crate::icon::draw_unit_icon_scaled(icon_id, icon_x, icon_y, ICON_W, ICON_H)
-    else {
-        // Icons GRP not loaded yet: text-only fallback above the minimap.
-        get_color_handle(if n > 0 { text_color::YELLOW } else { text_color::GREY2 });
-        bw_print_xy(buf.as_ptr(), screen_x, screen_y);
-        set_font_handle(core::ptr::null_mut());
-        return;
-    };
-
-    // Count right of the icon, vertically centred, with a drop shadow.
-    let mut count_buf = [0u8; 8];
-    let count = format!("{n}");
-    let clen = count.len().min(count_buf.len() - 1);
-    count_buf[..clen].copy_from_slice(&count.as_bytes()[..clen]);
-    let text_x = icon_x + iw + 4;
-    let text_y = icon_y + (ih - 8) / 2;
+    let text_x = screen_x + ICON_W + 4;
+    let text_y = screen_y + (ICON_H - 8) / 2;
     get_color_handle(text_color::BLACK);
-    bw_print_xy(count_buf.as_ptr(), text_x + 1, text_y + 1);
+    bw_print_xy(buf.as_ptr(), text_x + 1, text_y + 1);
     get_color_handle(if n > 0 { text_color::YELLOW } else { text_color::GREY2 });
-    bw_print_xy(count_buf.as_ptr(), text_x, text_y);
+    bw_print_xy(buf.as_ptr(), text_x, text_y);
+
+    let icon_id = crate::idle_workers::first_idle_icon(local)
+        .unwrap_or_else(|| tier1_worker_icon(local as u8));
+    let _ = crate::icon::draw_unit_icon_scaled(icon_id, screen_x, screen_y, ICON_W, ICON_H);
     set_font_handle(core::ptr::null_mut());
 }
 

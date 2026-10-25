@@ -333,7 +333,12 @@ pub(crate) unsafe fn poll() {
     let map_h = *(crate::nydus::MAP_SIZE_Y as *const u16) as i32 * crate::nydus::PX_PER_TILE;
     let sx = (pos.x as i32 - 320).clamp(0, (map_w - 640).max(0));
     let sy = (pos.y as i32 - 240).clamp(0, (map_h - 352).max(0));
+    // Set the camera position AND the pending-move globals: the game's
+    // per-frame scroll code snaps the screen back toward g_move_to_*, so a
+    // screen-only write is undone immediately.
     *(0x00628448 as *mut i32) = sx;
     *(0x00628470 as *mut i32) = sy;
+    *(0x0062848C as *mut i32) = sx;
+    *(0x006284A8 as *mut i32) = sy;
     crate::select::move_screen(pos.x as u16, pos.y as u16);
 }

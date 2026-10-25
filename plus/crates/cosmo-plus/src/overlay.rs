@@ -59,6 +59,11 @@ const ADDR_GET_COLOR_HANDLE: usize = 0x0041F610;
 static OLD_DRAW_PROC: AtomicUsize = AtomicUsize::new(0);
 /// Whether the overlay is enabled (resolved once at install).
 static ENABLED: AtomicBool = AtomicBool::new(false);
+
+/// Whether the saturation overlay switch resolved to on.
+pub(crate) fn enabled() -> bool {
+    ENABLED.load(Ordering::SeqCst)
+}
 /// Test-only cap on the per-node optimum (from `CM_PLUS_SATURATION_OPT_CAP`), so the
 /// white->race-colour flip can be forced without waiting for a fully-saturated base.
 static OPT_CAP: AtomicUsize = AtomicUsize::new(usize::MAX);
@@ -209,6 +214,7 @@ pub(crate) fn install() {
         crate::log::log(&format!(
             "[cosmo-plus] overlay: hooked game draw proc (old 0x{old:08X} -> new 0x{my:08X}, patch={r})"
         ));
+        crate::state::hook("draw-game-proc", DRAW_GAME_PROC_PTR, old as usize, my as usize);
     }
 
     install_changes();
@@ -346,7 +352,15 @@ unsafe fn draw_idle_counter() {
     // panel's button strip. `bw_print_xy`/`bw_print_icon` take SCREEN
     // coordinates on the draw-hook surface (the nydus *world* labels subtract
     // the camera to get here), so the badge is fixed on screen — no camera term.
-    let rect = *(crate::nydus::G_MINIMAP_RECT as *const [i32; 4]);
+    // Validated minimap rect: when the global no longer holds sane values the
+    // badge disarms explicitly instead of drawing off-screen.
+    let Some(rect) = crate::state::minimap_rect() else {
+        static WARNED: std::sync::Once = std::sync::Once::new();
+        WARNED.call_once(|| {
+            crate::log::log("[cosmo-plus] idle badge: minimap rect invalid; badge disabled");
+        });
+        return;
+    };
     const ICON_W: i32 = 24;
     const ICON_H: i32 = 22;
     let screen_x = crate::config::env("CM_PLUS_IDLE_BADGE_X")

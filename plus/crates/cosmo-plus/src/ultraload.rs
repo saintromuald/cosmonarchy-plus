@@ -27,6 +27,15 @@ static SPEED_PCT: AtomicU32 = AtomicU32::new(150);
 static RADIUS_SQ: AtomicI64 = AtomicI64::new(480 * 480);
 /// `ultraload.enabled`; off means "never touch top_speed".
 static ENABLED: AtomicU32 = AtomicU32::new(1);
+
+/// Resolved status for the boot report.
+pub(crate) fn status() -> String {
+    if ENABLED.load(Ordering::SeqCst) == 1 {
+        "armed".to_string()
+    } else {
+        "disabled (CM_PLUS_NO_ULTRALOAD)".to_string()
+    }
+}
 /// Diagnostics: how many boosts have been logged so far.
 static LOGGED: AtomicU32 = AtomicU32::new(0);
 

@@ -18,6 +18,14 @@ const GPTp_MODULE: &[u8] = b"gptp.qdp\0";
 const CAMERA_CAP: usize = 8;
 
 /// Resolved export (pointer into gptp.qdp), set once at install.
+/// Resolved status for the boot report.
+pub(crate) fn status() -> String {
+    match SCREENS_FN.get().copied().flatten() {
+        Some(_) => "armed (C1-C8 minimap labels)".to_string(),
+        None => "disabled (gptp lacks cosmo_camera_screens)".to_string(),
+    }
+}
+
 static SCREENS_FN: OnceLock<Option<unsafe extern "system" fn() -> *const u16>> =
     OnceLock::new();
 

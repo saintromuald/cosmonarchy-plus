@@ -30,3 +30,25 @@ unsafe fn startup() {
     ));
     crate::plus::install();
 }
+
+/// This DLL's own module base (for the boot report), resolved from a code
+/// address instead of a hard-coded name.
+pub(crate) fn self_base() -> usize {
+    unsafe {
+        use windows_sys::Win32::System::LibraryLoader::{
+            GetModuleHandleExW, GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS,
+            GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+        };
+        let mut h: windows_sys::Win32::Foundation::HMODULE = std::mem::zeroed();
+        let addr = self_base as *const () as *const u16;
+        if GetModuleHandleExW(
+            GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+            addr,
+            &mut h,
+        ) != 0
+        {
+            return h as usize;
+        }
+    }
+    0
+}

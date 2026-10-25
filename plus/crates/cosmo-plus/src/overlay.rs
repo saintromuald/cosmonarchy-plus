@@ -37,7 +37,7 @@ static FONT_INDEX: AtomicUsize = AtomicUsize::new(0);
 /// `g_draw_text` (Box16: left/top/right/bottom, i16 each) — the text clip box.
 const G_DRAW_TEXT: usize = 0x006CE0C8;
 /// `g_print_xy_alignment` (u8).
-const G_PRINT_XY_ALIGNMENT: usize = 0x006CE110;
+pub(crate) const G_PRINT_XY_ALIGNMENT: usize = 0x006CE110;
 /// `g_screen_x` / `g_screen_y` (`s32*`, i.e. the address of the camera value in world px).
 const G_SCREEN_X_PTR: usize = 0x00628448;
 const G_SCREEN_Y_PTR: usize = 0x00628470;
@@ -232,6 +232,20 @@ fn compute_enabled() -> bool {
         .unwrap_or(false)
 }
 
+/// Re-resolve the overlay font and saturation switch (in-place reload).
+pub(crate) fn rearm() {
+    let idx = match crate::config::env("CM_PLUS_OVERLAY_FONT").as_deref() {
+        Some(v) if v.eq_ignore_ascii_case("std") => 1,
+        _ => 0,
+    };
+    FONT_INDEX.store(idx, Ordering::SeqCst);
+    ENABLED.store(compute_enabled(), Ordering::SeqCst);
+    crate::log::log(&format!(
+        "[cosmo-plus] overlay: reloaded (font index {idx}, enabled {})",
+        ENABLED.load(Ordering::SeqCst)
+    ));
+}
+
 /// Log which worker tiers have a functional mover (speed > 1 px/frame) per race. The six
 /// placeholder tier-2 slots are immobile in this build; their rows still show the same
 /// measured optimum (the truth of the model), but this note flags them for the reader.
@@ -292,6 +306,9 @@ unsafe extern "stdcall" fn draw_hook(surface: *mut core::ffi::c_void, bounds: *m
     // Idle-worker counter above the minimap (SC2-style; drawn regardless of
     // the overlay switch, like the tab indicator).
     draw_idle_counter();
+    // Dev REPL: poll the command file and draw transient probes.
+    crate::repl::poll();
+    crate::repl::draw();
     // Nydus numbering + C1-C8 camera labels: world annotations that must be
     // visible whenever a game runs, regardless of the saturation overlay
     // switch or of whether the local player has any labelled nodes left.
@@ -363,12 +380,19 @@ unsafe fn draw_idle_counter() {
     };
     const ICON_W: i32 = 24;
     const ICON_H: i32 = 22;
-    let screen_x = crate::config::env("CM_PLUS_IDLE_BADGE_X")
-        .and_then(|v| v.parse::<i32>().ok())
-        .unwrap_or(rect[0] + 12);
-    let screen_y = crate::config::env("CM_PLUS_IDLE_BADGE_Y")
-        .and_then(|v| v.parse::<i32>().ok())
-        .unwrap_or(rect[1] - 68);
+    if !crate::repl::badge_shown() {
+        return;
+    }
+    let (pin_x, pin_y) = crate::repl::badge_pin().unwrap_or((
+        crate::config::env("CM_PLUS_IDLE_BADGE_X")
+            .and_then(|v| v.parse::<i32>().ok())
+            .unwrap_or(rect[0] + 12),
+        crate::config::env("CM_PLUS_IDLE_BADGE_Y")
+            .and_then(|v| v.parse::<i32>().ok())
+            .unwrap_or(rect[1] - 68),
+    ));
+    let screen_x = pin_x;
+    let screen_y = pin_y;
 
     set_font_handle(font);
     write_draw_text(0, 0, 0x7FFF, 0x7FFF);
@@ -1168,7 +1192,7 @@ pub(crate) unsafe fn get_color_handle(color: u8) {
 
 /// `helper::set_font_handle(u32*)` — ecx = font handle.
 #[inline(never)]
-unsafe fn set_font_handle(font: *mut u32) {
+pub(crate) unsafe fn set_font_handle(font: *mut u32) {
     core::arch::asm!(
         "pushad",
         "call edx",
@@ -1184,7 +1208,7 @@ unsafe fn set_font_handle(font: *mut u32) {
 // ---------------------------------------------------------------------------
 
 /// The overlay label font handle (`font_base[FONT_INDEX]`), or null if not initialised.
-unsafe fn in_game_font() -> *mut u32 {
+pub(crate) unsafe fn in_game_font() -> *mut u32 {
     let font_base = FONT_BASE as *const *const u32;
     let idx = FONT_INDEX.load(Ordering::SeqCst);
     *font_base.add(idx) as *mut u32
@@ -1199,7 +1223,7 @@ pub(crate) unsafe fn camera() -> (i32, i32) {
 }
 
 /// Write the text clip box (`g_draw_text`) so our labels are not clipped to the message log.
-unsafe fn write_draw_text(left: i16, top: i16, right: i16, bottom: i16) {
+pub(crate) unsafe fn write_draw_text(left: i16, top: i16, right: i16, bottom: i16) {
     *(G_DRAW_TEXT as *mut i16) = left;
     *((G_DRAW_TEXT + 2) as *mut i16) = top;
     *((G_DRAW_TEXT + 4) as *mut i16) = right;

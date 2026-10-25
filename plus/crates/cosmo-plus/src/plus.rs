@@ -111,6 +111,8 @@ pub(crate) fn install() {
     // SC2-style Tab subgroup cycling (see tab_cycle.rs). Polled from the draw hook.
     crate::tab_cycle::install();
     crate::state::feature("tab-cycle", crate::tab_cycle::status());
+    // Dev REPL (CM_PLUS_REPL=1 only; inert otherwise).
+    crate::repl::install();
 
     // Boot integration report: resolve + verify every fixed global, dump the
     // feature/hook/config map to cosmo_plus.state.json (also reachable from the

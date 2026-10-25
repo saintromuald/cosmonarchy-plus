@@ -59,7 +59,7 @@ unsafe extern "C" fn tick() {
         FIRST_TICK.call_once(|| {
             // In-game integration report: the strict globals (icons, fonts,
             // draw-text box) are now required to hold live values.
-            unsafe { crate::state::write_report("in-game") };
+            crate::state::write_report("in-game");
             crate::antimeta::debug_dump_game_types_once();
             crate::ultraload_icon::install_once();
             if measure_enabled() {
@@ -253,6 +253,18 @@ pub(crate) unsafe fn frame_count() -> u32 {
         }
         None => 0,
     }
+}
+
+/// Safe wrapper for the boot report / REPL: 0 when no game is running.
+pub(crate) fn frame_count_safe() -> u32 {
+    unsafe { frame_count() }
+}
+
+/// Total units in the active + hidden lists (REPL diagnostics).
+pub(crate) unsafe fn unit_count_safe() -> usize {
+    let mut n = 0usize;
+    for_each_unit(|_| n += 1);
+    n
 }
 
 /// Call `f` for every unit in the active + hidden linked lists.

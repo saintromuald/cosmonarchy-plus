@@ -94,6 +94,21 @@ pub(crate) fn install() {
     }
 }
 
+/// Re-parse the larva key from config (in-place reload).
+pub(crate) fn rearm() {
+    let name = crate::config::env("CM_PLUS_LARVA_KEY").unwrap_or_else(|| DEFAULT_LARVA_KEY.to_string());
+    match parse_key(&name) {
+        Some(vk) => {
+            KEY_VK.store(vk, Ordering::SeqCst);
+            crate::log::log(&format!("[cosmo-plus] larva pick: reloaded key {name} (VK 0x{vk:02X})"));
+        }
+        None => {
+            KEY_VK.store(0, Ordering::SeqCst);
+            crate::log::log(&format!("[cosmo-plus] larva pick: reloaded with unknown key {name:?}; disabled"));
+        }
+    }
+}
+
 use windows_sys::Win32::System::Threading::GetCurrentThreadId;
 use windows_sys::Win32::UI::WindowsAndMessaging::{SetWindowsHookExW, WH_KEYBOARD};
 

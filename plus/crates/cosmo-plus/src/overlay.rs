@@ -489,8 +489,9 @@ unsafe fn draw_tab_indicator() {
         format!("Tab {active}/{total} \u{b7} {short}")
     };
     let _ = write!(&mut buf[..], "{label}");
-    let (cx, cy) = camera();
-    bw_print_xy(buf.as_ptr(), cx + 60, cy + 250);
+    // Screen-fixed: bw_print_xy takes screen coordinates on this surface —
+    // adding the camera pushed the indicator thousands of pixels off-screen.
+    bw_print_xy(buf.as_ptr(), 60, 250);
     set_font_handle(core::ptr::null_mut());
 }
 

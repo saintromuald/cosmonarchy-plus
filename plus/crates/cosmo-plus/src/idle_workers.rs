@@ -158,6 +158,27 @@ pub(crate) fn install() {
     }
 }
 
+/// Re-resolve the hotkey from config (in-place reload). The keyboard hook
+/// stays installed; it just looks at the new VK.
+pub(crate) fn rearm() {
+    let name = crate::config::env("CM_PLUS_IDLE_WORKER_KEY")
+        .unwrap_or_else(|| DEFAULT_IDLE_WORKER_KEY.to_string());
+    match parse_key(&name) {
+        Some(vk) => {
+            KEY_VK.store(vk, Ordering::SeqCst);
+            crate::log::log(&format!(
+                "[cosmo-plus] idle workers: reloaded hotkey {name} (VK 0x{vk:02X})"
+            ));
+        }
+        None => {
+            KEY_VK.store(0, Ordering::SeqCst);
+            crate::log::log(&format!(
+                "[cosmo-plus] idle workers: reloaded with unknown key {name:?}; disabled"
+            ));
+        }
+    }
+}
+
 fn install_hook() {
     unsafe {
         let h = SetWindowsHookExW(
@@ -235,6 +256,11 @@ unsafe extern "system" fn keyboard_proc(code: i32, wparam: usize, lparam: isize)
         QUEUED.store(true, Ordering::SeqCst);
     }
     1 // swallow: the control group on this key never fires
+}
+
+/// Queue a press from outside the keyboard path (the dev REPL's `idle` command).
+pub(crate) fn queue_press() {
+    QUEUED.store(true, Ordering::SeqCst);
 }
 
 /// The local player's id, or `None` while it is not yet resolvable.

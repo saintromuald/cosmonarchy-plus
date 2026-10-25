@@ -1,0 +1,41 @@
+#!/usr/bin/env bash
+# tools/cosmo-repl — send commands to the dev REPL of a running game.
+#
+# The plugin only listens when it was launched with CM_PLUS_REPL=1 (see
+# tools/headless/boot_game.sh). Replies land in cosmo_plus.repl.log next to the
+# build.
+#
+#   tools/cosmo-repl "badge 40 280"
+#   tools/cosmo-repl -w            # tail the reply log
+#
+# The target build is $1 of the launcher layout, or COSMO_REPL_DIR.
+set -euo pipefail
+
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+PREFIX="${COSMO_GAME_ROOT:-$HOME/Games/cosmonarchy/prefix}"
+
+if [ "${1:-}" = "-w" ]; then
+    shift
+fi
+
+BUILD="${1:-versions/release-my-build-latest}"
+DIR="${COSMO_REPL_DIR:-$PREFIX/drive_c/Cosmonarchy/$BUILD}"
+
+if [ "${1:-}" = "-w" ] || [ "$BUILD" = "-w" ]; then
+    exec tail -f "$DIR/cosmo_plus.repl.log"
+fi
+
+[ -d "$DIR" ] || { echo "no build dir: $DIR" >&2; exit 1; }
+
+cmd="$*"
+if [ -z "$cmd" ]; then
+    echo "usage: cosmo-repl <command...> | cosmo-repl -w [build]" >&2
+    echo "commands: badge on|off|<x> <y> · icon <id> <x> <y> [w] [h] ·" >&2
+    echo "          text <str> <x> <y> [color] · idle · state · frame · units ·" >&2
+    echo "          reload-config" >&2
+    exit 1
+fi
+
+printf '%s\n' "$cmd" > "$DIR/cosmo_plus.cmd"
+sleep 0.6
+tail -n 5 "$DIR/cosmo_plus.repl.log" 2>/dev/null || echo "(no replies yet)"

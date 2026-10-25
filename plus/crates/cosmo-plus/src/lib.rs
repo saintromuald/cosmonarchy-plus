@@ -22,6 +22,8 @@ mod mpqdraft;
 mod nydus;
 mod overlay;
 mod plugin;
+mod reload;
+mod repl;
 mod plus;
 mod select;
 mod selftest;

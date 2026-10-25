@@ -181,12 +181,36 @@ pub(crate) fn install() {
         }
     }
     install_hook();
+    rearm_announce();
     // Resolve the selection table now: `gptp.qdp` (the mod) loads before this plugin
     // and has already rewritten the anchor immediates, so the extended table resolves
     // during the menu boot and is logged for the headless probe.
     unsafe {
         resolve_selection();
     }
+}
+
+/// Re-parse the forward/backward keys from config (in-place reload).
+pub(crate) fn rearm() {
+    if let Some(name) = crate::config::env("CM_PLUS_TAB_KEY") {
+        if let Some(vk) = parse_key(&name) {
+            FWD_VK.store(vk, Ordering::SeqCst);
+        }
+    }
+    if let Some(name) = crate::config::env("CM_PLUS_TAB_PREV_KEY") {
+        if let Some(vk) = parse_key(&name) {
+            PREV_VK.store(vk, Ordering::SeqCst);
+        }
+    }
+    rearm_announce();
+}
+
+fn rearm_announce() {
+    crate::log::log(&format!(
+        "[cosmo-plus] tab cycle: reloaded keys (fwd VK 0x{:02X}, prev VK 0x{:02X})",
+        FWD_VK.load(Ordering::SeqCst),
+        PREV_VK.load(Ordering::SeqCst)
+    ));
 }
 
 fn install_hook() {

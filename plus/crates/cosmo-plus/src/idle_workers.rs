@@ -332,10 +332,9 @@ pub(crate) unsafe fn poll() {
     ));
     let list: [*mut bw_dat::structs::Unit; SELECTION_CAP] = [chosen; SELECTION_CAP];
     crate::select::select_units_if_alt_not_held(list.as_ptr(), 1, 1, 1);
-    // SC2-F1 behaviour: jump the camera to the worker you just selected,
-    // through the engine's own move_screen (the same call the fork's F1-F8
-    // camera hotkeys use, so the clamps and the scroll system handle it).
-    // Writing the camera globals directly fought the engine's scroll logic
-    // and threw the view off — not done.
-    crate::select::move_screen(pos.x as u16, pos.y as u16);
+    // SC2-F1 behaviour: center the camera on the worker you just selected,
+    // through the game's own unit-centering routine (0x004E6020 — the
+    // portrait-double-click path), which computes the zoom-aware camera and
+    // scrolls to it. Raw camera-position calls landed the view elsewhere.
+    crate::select::move_screen_to_unit(chosen);
 }

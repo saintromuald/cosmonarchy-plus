@@ -265,6 +265,15 @@ unsafe extern "system" fn keyboard_proc(code: i32, wparam: usize, lparam: isize)
     if !down {
         return call_next(code, wparam, lparam);
     }
+    if crate::config::env_flag("CM_PLUS_TAB_DEBUG") {
+        let fwd = FWD_VK.load(Ordering::SeqCst);
+        if key == fwd as u32 || key == PREV_VK.load(Ordering::SeqCst) as u32 {
+            crate::log::log(&format!(
+                "[cosmo-plus] tab debug: hook saw key 0x{key:02X} (fwd 0x{fwd:02X}) frame={}",
+                crate::frame::frame_count_safe()
+            ));
+        }
+    }
     // Never interfere outside a running game.
     if crate::frame::frame_count() == 0 {
         return call_next(code, wparam, lparam);
@@ -284,6 +293,9 @@ unsafe extern "system" fn keyboard_proc(code: i32, wparam: usize, lparam: isize)
     let is_prev = (prev_vk != 0 && key == prev_vk as u32)
         || (is_fwd && (GetAsyncKeyState(VK_SHIFT) as u16 & 0x8000) != 0);
     if is_fwd || is_prev {
+        if crate::config::env_flag("CM_PLUS_TAB_DEBUG") {
+            crate::log::log("[cosmo-plus] tab debug: hook queued the press (swallowed)");
+        }
         QUEUED.store(if is_prev { 2 } else { 1 }, Ordering::SeqCst);
         return 1; // swallow: no terrain toggle, ever
     }

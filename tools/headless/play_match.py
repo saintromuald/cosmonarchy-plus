@@ -10,6 +10,8 @@ Takes a screenshot after every step so a failing step is obvious.
 import subprocess
 import sys
 import time
+import atexit
+import os
 
 HARNESS = "/tmp/opencode/harness"
 
@@ -38,7 +40,26 @@ def find_window(display: str) -> str:
     return ids[0].strip() if ids else ""
 
 
+def reap_game(display: str) -> None:
+    """Kill the game process group boot_game.sh left for this driver."""
+    if os.environ.get("CM_PLUS_KEEP_GAME"):
+        return
+    pidfile = f"{HARNESS}/game-{display}.pid"
+    try:
+        pid = int(open(pidfile).read().strip())
+    except (OSError, ValueError):
+        return
+    for sig in ("TERM", "KILL"):
+        sh(f"kill -{sig} -- -{pid} >/dev/null 2>&1")
+        time.sleep(2 if sig == "TERM" else 0.2)
+
+
 def main(display: str) -> int:
+    # Reap the game when this driver exits: boot_game.sh leaves it running
+    # for us, and a leftover harness game on a shared prefix hangs real
+    # launches. Setsid made the game its own process group, so one group
+    # kill takes the whole umu/pressure-vessel tree down.
+    atexit.register(reap_game, display)
     win = find_window(display)
     if not win:
         # The window can take a while to appear after the plugin reports in.

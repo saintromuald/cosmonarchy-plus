@@ -69,7 +69,7 @@ pub(crate) fn install() {
             return;
         };
         let site = off + 10; // the E8
-        let rel = std::ptr::read((site as *const i32));
+        let rel = std::ptr::read(((site + 1) as *const i32));
         let chain = site as u32 + 5 + rel as u32;
         CHAIN.store(chain, Ordering::SeqCst);
 

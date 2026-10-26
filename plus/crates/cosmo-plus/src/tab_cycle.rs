@@ -45,7 +45,7 @@ use windows_sys::Win32::UI::Input::KeyboardAndMouse::GetAsyncKeyState;
 use windows_sys::Win32::UI::WindowsAndMessaging::{SetWindowsHookExW, WH_KEYBOARD};
 
 use cosmo_plus_core::hotkeys::{parse_key, DEFAULT_TAB_KEY};
-use cosmo_plus_core::subgroups::subgroup_runs;
+use cosmo_plus_core::subgroups::{subgroup_runs, SubgroupAction, SubgroupModel, SubgroupRun};
 
 /// `g_client_selection_count` (u8) — maintained by `update_selected_unit_data`.
 const CLIENT_SELECTION_COUNT: usize = 0x0059723D;
@@ -108,34 +108,39 @@ static QUEUED: AtomicU32 = AtomicU32::new(0);
 /// Game frame until which the indicator stays visible.
 static SHOW_UNTIL_FRAME: AtomicU32 = AtomicU32::new(0);
 
-/// Selection identity and the active-subgroup state. `base_sorted` is the
-/// selection (as sorted raw Unit* pointers) that the current cycle belongs to —
-/// order-insensitive, because the cycle itself rotates the array. A selection
-/// whose sorted pointers differ is a fresh one and resets the cycle.
-/// `groups_order` remembers the unit-id order of the subgroups as they first
-/// appeared, so the indicator numbers stay stable across rotations.
-struct Cycle {
-    /// Active subgroup index into `groups_order` (0-based).
+/// Display state for the overlay/portrait aim: the active subgroup and the
+/// unit it points at. The cycle arithmetic itself lives in the pure
+/// `cosmo_plus_core::subgroups::SubgroupModel` (host-tested).
+struct Display {
+    /// Active subgroup index (0-based).
     active: u32,
     groups: u32,
-    count: usize,
     active_id: u16,
     active_ptr: u32,
-    base_sorted: Vec<u32>,
-    groups_order: Vec<u16>,
 }
 
-static CYCLE: Lazy<Mutex<Cycle>> = Lazy::new(|| {
-    Mutex::new(Cycle {
+static DISPLAY: Lazy<Mutex<Display>> = Lazy::new(|| {
+    Mutex::new(Display {
         active: 0,
         groups: 0,
-        count: 0,
         active_id: 0,
         active_ptr: 0,
-        base_sorted: Vec::new(),
-        groups_order: Vec::new(),
     })
 });
+
+/// The SC2 subgroup state machine (pure; see cosmo-plus-core).
+static MODEL: Lazy<Mutex<Option<SubgroupModel>>> = Lazy::new(|| Mutex::new(None));
+
+/// Order-insensitive selection identity: FNV-1a over the sorted raw unit
+/// pointers, so the rotated array still matches the selection it belongs to.
+fn selection_identity(ptrs: &[u32]) -> u64 {
+    let mut h: u64 = 0xcbf2_9ce4_8422_2325;
+    for &p in ptrs {
+        h ^= p as u64;
+        h = h.wrapping_mul(0x100_0000_01b3);
+    }
+    h
+}
 
 pub(crate) fn install() {
     if crate::config::env_flag("CM_PLUS_NO_TAB_CYCLE") {
@@ -415,114 +420,96 @@ pub(crate) unsafe fn poll() {
         }
         return;
     };
-    let count = ids.len();
-    if count < 2 {
-        if crate::config::env_flag("CM_PLUS_TAB_DEBUG") {
-            crate::log::log(&format!(
-                "[cosmo-plus] tab cycle debug: selection count={count} ids={:?} (need 2+ for Tab)",
-                &ids[..count.min(12)],
-            ));
-        }
-        return;
-    }
 
-    let mut sorted = ptrs.clone();
-    sorted.sort_unstable();
-    let mut cycle = CYCLE.lock().unwrap();
-    // Fresh selection (different multiset, or different size, than the one the
-    // current cycle belongs to) resets to the first subgroup, like re-selecting
-    // in SC2. The array may be rotated from a previous cycle step, so identity
-    // is the sorted pointer multiset, not the order.
-    let same_selection = cycle.count == count && cycle.base_sorted == sorted;
-    if !same_selection {
-        cycle.active = 0;
-        cycle.groups = 0;
-        cycle.count = count;
-        cycle.base_sorted = sorted;
-        // Remember the subgroup type order as it appears in the fresh selection.
-        let fresh_runs = subgroup_runs(&ids);
-        cycle.groups_order = fresh_runs.iter().map(|r| r.unit_id).collect();
-        if crate::config::env_flag("CM_PLUS_TAB_DEBUG") {
-            crate::log::log(&format!(
-                "[cosmo-plus] tab cycle debug: fresh selection count={count} ids={:?}",
-                &ids[..count.min(12)],
-            ));
-        }
-    }
+    // Feed the press through the pure SC2 subgroup model.
+    let identity = selection_identity(&ptrs);
+    let action = {
+        let mut guard = MODEL.lock().unwrap();
+        let model = guard
+            .get_or_insert_with(|| SubgroupModel::new(identity, ids.clone()));
+        model.press(identity, ids.clone(), dir)
+    };
 
-    let runs = subgroup_runs(&ids);
-    if runs.len() < 2 {
-        cycle.groups = 1;
-        if crate::config::env_flag("CM_PLUS_TAB_DEBUG") {
-            crate::log::log("[cosmo-plus] tab cycle debug: single subgroup, Tab inert");
-        }
-        return; // single-type selection: Tab stays inert
-    }
-    if crate::config::env_flag("CM_PLUS_TAB_DEBUG") {
-        crate::log::log(&format!(
-            "[cosmo-plus] tab cycle debug: press dir={dir:+} count={count} ids={:?}",
-            &ids[..count.min(12)],
-        ));
-    }
-
-    let groups = runs.len() as u32;
-    // The group ORDER is fixed at selection time (`groups_order`); the
-    // rotation reorders the array, so the next group must be computed from
-    // that order, not from the rotated runs. The active group always sits
-    // at the front after a rotation; on a fresh selection it is group 0.
-    let next = (cycle.active as i32 + dir).rem_euclid(groups as i32) as usize;
-    let next_id = *cycle.groups_order.get(next).unwrap_or(&runs[0].unit_id);
-    // Locate the next group's run in the CURRENT (possibly rotated) order.
-    let run = runs
-        .iter()
-        .find(|r| r.unit_id == next_id)
-        .unwrap_or(&runs[next.min(runs.len() - 1)]);
+    let (active, groups, active_id, rotate_run): (u32, u32, u16, Option<SubgroupRun>) =
+        match action {
+            SubgroupAction::Inert => {
+                if crate::config::env_flag("CM_PLUS_TAB_DEBUG") {
+                    crate::log::log("[cosmo-plus] tab cycle debug: single subgroup, Tab inert");
+                }
+                return;
+            }
+            SubgroupAction::Reset { active_id, groups } => {
+                // Fresh selection: SC2 shows the first subgroup, which is
+                // already at the front of the array — nothing to rotate.
+                if crate::config::env_flag("CM_PLUS_TAB_DEBUG") {
+                    crate::log::log(&format!(
+                        "[cosmo-plus] tab cycle debug: fresh selection (first subgroup {active_id})"
+                    ));
+                }
+                (0, groups, active_id, None)
+            }
+            SubgroupAction::Cycle {
+                active_id,
+                index,
+                groups,
+            } => {
+                // Locate the active group's run in the CURRENT (possibly
+                // rotated) array and rotate it to the front.
+                let runs = subgroup_runs(&ids);
+                let run = runs
+                    .iter()
+                    .find(|r| r.unit_id == active_id)
+                    .or_else(|| runs.get(index as usize))
+                    .cloned();
+                (index, groups, active_id, run)
+            }
+        };
 
     if !selftest {
-        // Rotate the engine's own selection array: the chosen subgroup first,
-        // everything else after it, order preserved. No select command and no
-        // sound — this is viewer-local, exactly like SC2's subgroup pointer.
-        // Then rebuild the command card from the rotated array, so the active
-        // subgroup's spells/build buttons are the ones on the card and the
-        // hotkeys dispatch to them.
-        rotate_selection(run.start, run.len, count);
-        refresh_command_card();
+        if let Some(run) = &rotate_run {
+            // Rotate the engine's own selection array: the chosen subgroup
+            // first, everything else after it, order preserved. No select
+            // command and no sound — this is viewer-local, exactly like SC2's
+            // subgroup pointer. Then rebuild the command card from the rotated
+            // array, so the active subgroup's spells/build buttons are the
+            // ones on the card and the hotkeys dispatch to them.
+            rotate_selection(run.start, run.len, ids.len());
+            refresh_command_card();
+        }
     }
 
-    cycle.active = next as u32;
-    cycle.groups = groups;
-    cycle.active_id = run.unit_id;
-    cycle.active_ptr = ptrs[run.start];
-    drop(cycle);
-
+    {
+        let mut d = DISPLAY.lock().unwrap();
+        d.active = active;
+        d.groups = groups;
+        d.active_id = active_id;
+        d.active_ptr = ptrs.get(rotate_run.as_ref().map(|r| r.start).unwrap_or(0))
+            .copied()
+            .unwrap_or(0);
+    }
     SHOW_UNTIL_FRAME.store(frame.saturating_add(INDICATOR_FRAMES), Ordering::SeqCst);
     crate::log::log(&format!(
-        "[cosmo-plus] tab cycle: active subgroup {}/{} ({} units, id {}, selection[0] now {})",
-        next + 1,
+        "[cosmo-plus] tab cycle: active subgroup {}/{} (id {}, selection[0] now {})",
+        active + 1,
         groups,
-        count,
-        run.unit_id,
-        ptrs[run.start],
+        active_id,
+        ptrs.get(rotate_run.as_ref().map(|r| r.start).unwrap_or(0))
+            .copied()
+            .unwrap_or(0),
     ));
 }
 
 /// Reset the per-game state (called when a new game starts).
 pub(crate) fn reset() {
-    CYCLE.lock().unwrap().reset();
+    *MODEL.lock().unwrap() = None;
+    *DISPLAY.lock().unwrap() = Display {
+        active: 0,
+        groups: 0,
+        active_id: 0,
+        active_ptr: 0,
+    };
     QUEUED.store(0, Ordering::SeqCst);
     SHOW_UNTIL_FRAME.store(0, Ordering::SeqCst);
-}
-
-impl Cycle {
-    fn reset(&mut self) {
-        self.active = 0;
-        self.groups = 0;
-        self.count = 0;
-        self.active_id = 0;
-        self.active_ptr = 0;
-        self.base_sorted.clear();
-        self.groups_order.clear();
-    }
 }
 
 /// Whether `ptr` is among the units in the engine's client selection right
@@ -609,15 +596,20 @@ unsafe fn rotate_selection(run_start: usize, run_len: usize, count: usize) -> bo
 /// every frame, the command card keeps aiming at the old unit and its
 /// abilities stop working.
 pub(crate) unsafe fn apply_display() {
-    let mut cycle = CYCLE.lock().unwrap();
-    if cycle.groups < 2 || cycle.active_ptr == 0 {
+    let mut d = DISPLAY.lock().unwrap();
+    if d.groups < 2 || d.active_ptr == 0 {
         return;
     }
-    if !selection_contains(cycle.active_ptr) {
-        cycle.reset();
+    if !selection_contains(d.active_ptr) {
+        *d = Display {
+            active: 0,
+            groups: 0,
+            active_id: 0,
+            active_ptr: 0,
+        };
         return;
     }
-    std::ptr::write(G_ACTIVE_PORTRAIT_UNIT as *mut u32, cycle.active_ptr);
+    std::ptr::write(G_ACTIVE_PORTRAIT_UNIT as *mut u32, d.active_ptr);
 }
 
 /// Indicator state for the overlay: `Some((active, total))` while the Tab indicator
@@ -626,14 +618,14 @@ pub(crate) fn indicator(frame: u32) -> Option<(u32, u32)> {
     if frame == 0 || frame > SHOW_UNTIL_FRAME.load(Ordering::SeqCst) {
         return None;
     }
-    let cycle = CYCLE.lock().unwrap();
-    if cycle.groups < 2 {
+    let d = DISPLAY.lock().unwrap();
+    if d.groups < 2 {
         return None;
     }
-    Some((cycle.active + 1, cycle.groups))
+    Some((d.active + 1, d.groups))
 }
 
 /// The active subgroup's unit id (0 = none), for the indicator's unit name.
 pub(crate) fn active_unit_id() -> u16 {
-    CYCLE.lock().unwrap().active_id
+    DISPLAY.lock().unwrap().active_id
 }

@@ -71,15 +71,27 @@ pub(crate) fn install() {
     }
 }
 
-/// Naked fastcall trampoline: call the chained minimap draw with the
-/// registers the game passed in, then draw our overlays, then RET 8.
+/// Naked fastcall trampoline. At entry the game has passed the fastcall
+/// registers and two stack args: `[ESP+4] = user`, `[ESP+8] = draw_ctx`
+/// (with the game's return address at `[ESP]`). The chained function has
+/// exactly that same signature and ends in `RET 8`, so it must be entered
+/// with an identical frame — a plain `call` would push an extra return
+/// address and shift its arguments. The two args are re-pushed first; the
+/// chain's own `RET 8` pops them again, restoring the pre-push state.
 #[unsafe(naked)]
 unsafe extern "fastcall" fn trampoline() {
     core::arch::naked_asm!(
-        // Chain first (fork/vanilla minimap draw), registers intact.
-        "call dword ptr [{chain}]",
-        // Save everything, align the stack for the Rust call, draw, restore.
+        // Save everything; the chain needs ECX (this) and EDX (event) intact.
         "pushad",
+        // Rebuild the chain's exact frame: push draw_ctx, then user.
+        "mov eax, [esp + 40]",
+        "push eax",
+        "mov eax, [esp + 40]",
+        "push eax",
+        // Chain first (fork/vanilla minimap draw); its RET 8 pops the two
+        // args back off, so ESP lands exactly at the post-pushad state.
+        "call dword ptr [{chain}]",
+        // Align the stack for the Rust draw call, draw, restore.
         "mov ebx, esp",
         "and esp, 0xFFFFFFF0",
         "sub esp, 16",

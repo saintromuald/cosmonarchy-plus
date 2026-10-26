@@ -164,8 +164,10 @@ static MODEL: Lazy<Mutex<Option<SubgroupModel>>> = Lazy::new(|| Mutex::new(None)
 /// Order-insensitive selection identity: FNV-1a over the sorted raw unit
 /// pointers, so the rotated array still matches the selection it belongs to.
 fn selection_identity(ptrs: &[u32]) -> u64 {
+    let mut sorted = ptrs.to_vec();
+    sorted.sort_unstable();
     let mut h: u64 = 0xcbf2_9ce4_8422_2325;
-    for &p in ptrs {
+    for &p in &sorted {
         h ^= p as u64;
         h = h.wrapping_mul(0x100_0000_01b3);
     }

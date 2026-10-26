@@ -330,6 +330,11 @@ unsafe extern "stdcall" fn draw_hook(surface: *mut core::ffi::c_void, bounds: *m
     // the minimap dispatch — see hud.rs — so the zoom crop never hides them.)
     draw_world_annotations();
     draw_pass();
+    // Screen-fixed HUD overlays on the world surface: visible at 100% zoom
+    // (the only zoom where this surface is presented directly); at magnified
+    // zoom the deferred-screen-text hook (hud.rs) draws them on the screen
+    // buffer instead, and this copy falls outside the zoom crop.
+    crate::hud::draw_overlays();
     // One-shot abilities dump (CM_PLUS_DUMP_ABILITIES=1): unit -> buttons ->
     // orders map for the smart-cast classification.
     crate::abilities::dump_once();

@@ -65,22 +65,22 @@ pub fn next_active(active: u32, groups: u32, dir: i32) -> u32 {
 /// unit-pointer hash the engine crate computes) because the underlying array
 /// gets rotated as the model cycles.
 ///
-/// The active subgroup is tracked by **unit id**, never by index: the array
-/// order is rotated by the adapter on every cycle, so an index into it would
-/// point at a different subgroup after each rotation. The cyclic subgroup
-/// order itself is invariant under rotation, so "the next run after the
-/// active id in the current order" is the SC2-exact advance.
+/// Subgroups are keyed by each run's **first unit pointer**, never by unit
+/// id: a mixed selection can hold the same unit type in two separate runs
+/// (click order interleaves types), and an id-keyed model would always find
+/// the first occurrence and bounce between the duplicates forever. The
+/// pointer token is unique per run and stable across array rotations, so the
+/// canonical order (first appearance, fixed when the selection is fresh)
+/// cycles through every run exactly once, SC2-exact.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SubgroupModel {
     /// Order-insensitive identity of the selection this state belongs to.
     identity: u64,
-    /// The canonical subgroup order (unit ids), fixed when the selection is
-    /// first seen. The adapter rotates the underlying array on every cycle,
-    /// but the canonical order — first appearance in the original selection,
-    /// SC2's subgroup order — never changes.
-    order: Vec<u16>,
-    /// The unit id of the active subgroup (stable across array rotations).
-    active_id: u16,
+    /// The canonical subgroup order: each run's first-unit pointer token, in
+    /// first-appearance order. Never changes while the selection is the same.
+    order: Vec<u32>,
+    /// The active run's token (stable across array rotations).
+    active_key: u32,
 }
 
 /// What one key press should do.
@@ -90,66 +90,88 @@ pub enum SubgroupAction {
     Inert,
     /// The selection changed since the last press: the active subgroup is the
     /// first one (SC2 resets to the first subgroup on a fresh selection).
-    Reset { active_id: u16, groups: u32 },
+    Reset {
+        active_id: u16,
+        active_key: u32,
+        groups: u32,
+    },
     /// Same selection, cycled: the newly active subgroup. `index` is the
     /// subgroup's position in the canonical order.
-    Cycle { active_id: u16, index: u32, groups: u32 },
+    Cycle {
+        active_id: u16,
+        active_key: u32,
+        index: u32,
+        groups: u32,
+    },
 }
 
-/// The canonical subgroup order: the distinct unit ids by first appearance.
-fn canonical_order(ids: &[u16]) -> Vec<u16> {
+/// The canonical subgroup order: one (key, id) pair per run, in first
+/// appearance order. The key is the run's first unit token (pointer) — unique
+/// even when the same unit id appears in several runs.
+fn canonical_keys(ids: &[u16], ptrs: &[u32]) -> Vec<(u32, u16)> {
     subgroup_runs(ids)
         .into_iter()
-        .map(|r| r.unit_id)
+        .map(|r| (ptrs[r.start.min(ptrs.len().saturating_sub(1))], r.unit_id))
         .collect()
 }
 
 impl SubgroupModel {
-    pub fn new(identity: u64, ids: Vec<u16>) -> Self {
-        let order = canonical_order(&ids);
+    pub fn new(identity: u64, ids: Vec<u16>, ptrs: Vec<u32>) -> Self {
+        let order = canonical_keys(&ids, &ptrs);
         Self {
             identity,
-            active_id: order.first().copied().unwrap_or(0),
-            order,
+            active_key: order.first().map(|&(k, _)| k).unwrap_or(0),
+            order: order.into_iter().map(|(k, _)| k).collect(),
         }
     }
 
     /// The id of the currently active subgroup (the first one when the model
     /// was just created).
     pub fn active_id(&self) -> u16 {
-        self.active_id
+        self.active_key as u16
     }
 
     /// Feed a key press: `dir` = +1 (Tab) / -1 (Shift+Tab). Returns the action
     /// to take and updates the internal state. A selection whose identity
     /// differs from the model's is a fresh selection: SC2 resets to the first
     /// subgroup without advancing.
-    pub fn press(&mut self, identity: u64, ids: Vec<u16>, dir: i32) -> SubgroupAction {
+    pub fn press(
+        &mut self,
+        identity: u64,
+        ids: Vec<u16>,
+        ptrs: Vec<u32>,
+        dir: i32,
+    ) -> SubgroupAction {
         let fresh = identity != self.identity;
         if fresh {
             self.identity = identity;
-            self.order = canonical_order(&ids);
-            self.active_id = self.order.first().copied().unwrap_or(0);
+            let keys = canonical_keys(&ids, &ptrs);
+            self.active_key = keys.first().map(|&(k, _)| k).unwrap_or(0);
+            self.order = keys.into_iter().map(|(k, _)| k).collect();
         }
         let groups = self.order.len() as u32;
         if groups < 2 {
             return SubgroupAction::Inert;
         }
+        let active_id = id_of(&ids, &ptrs, self.active_key).unwrap_or(0);
         if fresh {
             return SubgroupAction::Reset {
-                active_id: self.active_id,
+                active_id,
+                active_key: self.active_key,
                 groups,
             };
         }
         let idx = self
             .order
             .iter()
-            .position(|&id| id == self.active_id)
+            .position(|&k| k == self.active_key)
             .unwrap_or(0);
         let next = next_active(idx as u32, groups, dir);
-        self.active_id = self.order[next as usize];
+        self.active_key = self.order[next as usize];
+        let active_id = id_of(&ids, &ptrs, self.active_key).unwrap_or(0);
         SubgroupAction::Cycle {
-            active_id: self.active_id,
+            active_id,
+            active_key: self.active_key,
             index: next,
             groups,
         }
@@ -162,34 +184,56 @@ impl SubgroupModel {
     /// reordered underneath (the engine re-copies its canonical selection
     /// order on its own events), so the fed ids are only used to detect
     /// freshness.
-    pub fn ensure(&mut self, identity: u64, ids: Vec<u16>) -> SubgroupAction {
+    pub fn ensure(
+        &mut self,
+        identity: u64,
+        ids: Vec<u16>,
+        ptrs: Vec<u32>,
+    ) -> SubgroupAction {
         let fresh = identity != self.identity;
         if fresh {
             self.identity = identity;
-            self.order = canonical_order(&ids);
-            self.active_id = self.order.first().copied().unwrap_or(0);
+            let keys = canonical_keys(&ids, &ptrs);
+            self.active_key = keys.first().map(|&(k, _)| k).unwrap_or(0);
+            self.order = keys.into_iter().map(|(k, _)| k).collect();
         }
         let groups = self.order.len() as u32;
         if groups < 2 {
             return SubgroupAction::Inert;
         }
+        let active_id = id_of(&ids, &ptrs, self.active_key).unwrap_or(0);
         if fresh {
             return SubgroupAction::Reset {
-                active_id: self.active_id,
+                active_id,
+                active_key: self.active_key,
                 groups,
             };
         }
         let idx = self
             .order
             .iter()
-            .position(|&id| id == self.active_id)
+            .position(|&k| k == self.active_key)
             .unwrap_or(0);
         SubgroupAction::Cycle {
-            active_id: self.active_id,
+            active_id,
+            active_key: self.active_key,
             index: idx as u32,
             groups,
         }
     }
+}
+
+/// The unit id of the run whose first-unit token is `key`, in the current
+/// array order.
+fn id_of(ids: &[u16], ptrs: &[u32], key: u32) -> Option<u16> {
+    let runs = subgroup_runs(ids);
+    for r in runs {
+        let k = ptrs.get(r.start.min(ptrs.len().saturating_sub(1))).copied();
+        if k == Some(key) {
+            return Some(r.unit_id);
+        }
+    }
+    None
 }
 
 #[cfg(test)]
@@ -206,152 +250,169 @@ mod tests {
         h
     }
 
-    #[test]
-    fn twelve_mavericks_are_one_subgroup_and_tab_is_inert() {
-        let ids = vec![12u16; 12];
-        let mut m = SubgroupModel::new(identity_of(&ids), ids.clone());
-        assert!(matches!(m.press(identity_of(&ids), ids.clone(), 1), SubgroupAction::Inert));
+    /// Distinct fake pointer tokens, one per selection slot.
+    fn ptrs_of(ids: &[u16]) -> Vec<u32> {
+        (0..ids.len() as u32).map(|i| 1000 + i * 4).collect()
+    }
+
+    fn press(m: &mut SubgroupModel, ids: &[u16], dir: i32) -> SubgroupAction {
+        m.press(identity_of(ids), ids.to_vec(), ptrs_of(ids), dir)
+    }
+
+    fn ensure(m: &mut SubgroupModel, ids: &[u16]) -> SubgroupAction {
+        m.ensure(identity_of(ids), ids.to_vec(), ptrs_of(ids))
     }
 
     #[test]
-    fn barracks_factory_starport_are_three_subgroups() {
-        // rax, rax, fact, fact, port — three subgroups in selection order.
-        let ids = vec![106, 106, 120, 120, 132];
-        let mut m = SubgroupModel::new(identity_of(&ids), ids.clone());
-        assert_eq!(m.active_id(), 106);
+    fn twelve_mavericks_are_one_subgroup_and_tab_is_inert() {
+        let ids = vec![12u16; 12];
+        let mut m = SubgroupModel::new(identity_of(&ids), ids.clone(), ptrs_of(&ids));
+        assert!(matches!(press(&mut m, &ids, 1), SubgroupAction::Inert));
     }
 
     #[test]
     fn tab_cycles_forward_and_wraps() {
         let ids = vec![106, 106, 120, 132];
-        let id = identity_of(&ids);
-        let mut m = SubgroupModel::new(id, ids.clone());
-        let a = m.press(id, ids.clone(), 1);
-        assert_eq!(a, SubgroupAction::Cycle { active_id: 120, index: 1, groups: 3 });
-        let b = m.press(id, ids.clone(), 1);
-        assert_eq!(b, SubgroupAction::Cycle { active_id: 132, index: 2, groups: 3 });
-        let c = m.press(id, ids.clone(), 1);
-        assert_eq!(c, SubgroupAction::Cycle { active_id: 106, index: 0, groups: 3 });
+        let mut m = SubgroupModel::new(identity_of(&ids), ids.clone(), ptrs_of(&ids));
+        assert_eq!(press(&mut m, &ids, 1), SubgroupAction::Cycle {
+            active_id: 120, active_key: 1008, index: 1, groups: 3
+        });
+        assert_eq!(press(&mut m, &ids, 1), SubgroupAction::Cycle {
+            active_id: 132, active_key: 1012, index: 2, groups: 3
+        });
+        assert_eq!(press(&mut m, &ids, 1), SubgroupAction::Cycle {
+            active_id: 106, active_key: 1000, index: 0, groups: 3
+        });
     }
 
     #[test]
     fn shift_tab_cycles_backward() {
         let ids = vec![106, 120, 132];
-        let id = identity_of(&ids);
-        let mut m = SubgroupModel::new(id, ids.clone());
-        let a = m.press(id, ids.clone(), -1);
-        assert_eq!(a, SubgroupAction::Cycle { active_id: 132, index: 2, groups: 3 });
+        let mut m = SubgroupModel::new(identity_of(&ids), ids.clone(), ptrs_of(&ids));
+        assert_eq!(press(&mut m, &ids, -1), SubgroupAction::Cycle {
+            active_id: 132, active_key: 1008, index: 2, groups: 3
+        });
     }
 
     #[test]
     fn fresh_selection_resets_to_the_first_subgroup() {
         let first = vec![106, 120];
         let second = vec![120, 132]; // a different selection
-        let id1 = identity_of(&first);
-        let id2 = identity_of(&second);
-        let mut m = SubgroupModel::new(id1, first.clone());
-        let _ = m.press(id1, first.clone(), 1);
+        let mut m = SubgroupModel::new(identity_of(&first), first.clone(), ptrs_of(&first));
+        let _ = press(&mut m, &first, 1);
         // The player selects something else: the model resets to the first
         // subgroup WITHOUT advancing.
-        let a = m.press(id2, second.clone(), 1);
-        assert_eq!(a, SubgroupAction::Reset { active_id: 120, groups: 2 });
+        assert_eq!(press(&mut m, &second, 1), SubgroupAction::Reset {
+            active_id: 120, active_key: 1000, groups: 2
+        });
         // The next press on the same selection cycles normally.
-        let b = m.press(id2, second.clone(), 1);
-        assert_eq!(b, SubgroupAction::Cycle { active_id: 132, index: 1, groups: 2 });
-        // And the active id before any press on the fresh selection is 120.
-        let m2 = SubgroupModel::new(id2, second.clone());
-        assert_eq!(m2.active_id(), 120);
+        assert_eq!(press(&mut m, &second, 1), SubgroupAction::Cycle {
+            active_id: 132, active_key: 1004, index: 1, groups: 2
+        });
     }
 
+    /// THE regression: the same unit type selected in two separate runs (click
+    /// order interleaves types). An id-keyed model bounces between the two
+    /// copies forever; the pointer-token model cycles through every run once.
     #[test]
-    fn burrowed_and_unburrowed_are_separate_subgroups_via_derived_ids() {
-        // The engine folds the burrow state into the id: 7 = unburrowed
-        // roach, 0x8007 = burrowed. The model just sees two different ids.
-        let ids = vec![7, 7, 0x8007];
-        let id = identity_of(&ids);
-        let mut m = SubgroupModel::new(id, ids.clone());
-        assert_eq!(m.active_id(), 7);
-        let a = m.press(id, ids.clone(), 1);
-        assert_eq!(a, SubgroupAction::Cycle { active_id: 0x8007, index: 1, groups: 2 });
-    }
-
-    #[test]
-    fn mixed_units_and_buildings_share_the_same_rules() {
-        // Marines, Medics and a Barracks: same state machine.
-        let ids = vec![0, 0, 34, 106];
-        let id = identity_of(&ids);
-        let mut m = SubgroupModel::new(id, ids.clone());
-        assert_eq!(m.active_id(), 0);
+    fn duplicate_runs_cycle_through_every_run_once() {
+        // rax, fact, rax — id 106 twice, in two runs.
+        let ids = vec![106, 106, 120, 106];
+        let mut m = SubgroupModel::new(identity_of(&ids), ids.clone(), ptrs_of(&ids));
+        // run 1 = 106@0 (key 1000), run 2 = 120@2 (key 1008), run 3 = 106@3 (key 1012).
+        assert_eq!(press(&mut m, &ids, 1), SubgroupAction::Cycle {
+            active_id: 120, active_key: 1008, index: 1, groups: 3
+        });
+        assert_eq!(press(&mut m, &ids, 1), SubgroupAction::Cycle {
+            active_id: 106, active_key: 1012, index: 2, groups: 3
+        });
+        assert_eq!(press(&mut m, &ids, 1), SubgroupAction::Cycle {
+            active_id: 106, active_key: 1000, index: 0, groups: 3
+        });
+        // And the per-frame ensure never bounces between the duplicates.
+        assert_eq!(ensure(&mut m, &ids), SubgroupAction::Cycle {
+            active_id: 106, active_key: 1000, index: 0, groups: 3
+        });
+        assert_eq!(ensure(&mut m, &ids), SubgroupAction::Cycle {
+            active_id: 106, active_key: 1000, index: 0, groups: 3
+        });
     }
 
     /// The adapter rotates the selection array under the model on every cycle;
     /// the model must keep cycling through ALL subgroups regardless of the
-    /// rotated order fed back to it (the engine's array order changes, the
-    /// identity — order-insensitive — does not).
+    /// rotated order fed back to it.
     #[test]
     fn cycling_is_invariant_under_array_rotation() {
-        // rax, fact, port, nexus — four subgroups.
+        // rax, fact, port, nexus — four subgroups, tokens 1000/1008/1012/1016.
         let ids = vec![106, 106, 120, 132, 154];
+        let mut m = SubgroupModel::new(identity_of(&ids), ids.clone(), ptrs_of(&ids));
+        assert_eq!(press(&mut m, &ids, 1), SubgroupAction::Cycle {
+            active_id: 120, active_key: 1008, index: 1, groups: 4
+        });
+
+        // The adapter rotated fact to the front: the same units, new order,
+        // and the tokens travel with their units.
+        let rotated = vec![120, 106, 106, 132, 154];
+        let rptrs = vec![1008, 1000, 1004, 1012, 1016];
         let id = identity_of(&ids);
-        let mut m = SubgroupModel::new(id, ids.clone());
+        let e = m.ensure(id, rotated.clone(), rptrs.clone());
+        assert_eq!(e, SubgroupAction::Cycle {
+            active_id: 120, active_key: 1008, index: 1, groups: 4
+        });
 
-        // Press Tab: active = fact (120). The adapter rotates fact to the
-        // front, so the next feed sees the rotated order.
-        let a = m.press(id, ids.clone(), 1);
-        assert_eq!(a, SubgroupAction::Cycle { active_id: 120, index: 1, groups: 4 });
-
-        let rotated = vec![120, 106, 106, 132, 154]; // fact first now
-        // Per-frame ensure on the rotated array: still fact, canonical index 1.
-        let e = m.ensure(id, rotated.clone());
-        assert_eq!(e, SubgroupAction::Cycle { active_id: 120, index: 1, groups: 4 });
-
-        // Next Tab on the rotated array: port (132), NOT back to rax — the
-        // canonical order (rax, fact, port, nexus) is what cycles.
-        let b = m.press(id, rotated.clone(), 1);
-        assert_eq!(b, SubgroupAction::Cycle { active_id: 132, index: 2, groups: 4 });
+        // Next Tab on the rotated array: port (132), NOT back to rax.
+        let b = m.press(id, rotated.clone(), rptrs.clone(), 1);
+        assert_eq!(b, SubgroupAction::Cycle {
+            active_id: 132, active_key: 1012, index: 2, groups: 4
+        });
 
         // And again after the adapter rotates port to the front.
         let rotated2 = vec![132, 120, 106, 106, 154];
-        let c = m.press(id, rotated2.clone(), 1);
-        assert_eq!(c, SubgroupAction::Cycle { active_id: 154, index: 3, groups: 4 });
+        let rptrs2 = vec![1012, 1008, 1000, 1004, 1016];
+        let c = m.press(id, rotated2.clone(), rptrs2.clone(), 1);
+        assert_eq!(c, SubgroupAction::Cycle {
+            active_id: 154, active_key: 1016, index: 3, groups: 4
+        });
 
         // Wraps around to rax (106) after the full cycle.
         let rotated3 = vec![154, 132, 120, 106, 106];
-        let d = m.press(id, rotated3.clone(), 1);
-        assert_eq!(d, SubgroupAction::Cycle { active_id: 106, index: 0, groups: 4 });
+        let rptrs3 = vec![1016, 1012, 1008, 1000, 1004];
+        let d = m.press(id, rotated3.clone(), rptrs3.clone(), 1);
+        assert_eq!(d, SubgroupAction::Cycle {
+            active_id: 106, active_key: 1000, index: 0, groups: 4
+        });
     }
 
     #[test]
     fn ensure_resets_on_a_fresh_selection_without_advancing() {
         let first = vec![106, 106, 120];
         let second = vec![120, 132];
-        let id1 = identity_of(&first);
-        let id2 = identity_of(&second);
-        let mut m = SubgroupModel::new(id1, first.clone());
-        let _ = m.press(id1, first.clone(), 1);
-        // The per-frame view sees a fresh selection: back to the first
-        // subgroup, no advance.
-        assert_eq!(
-            m.ensure(id2, second.clone()),
-            SubgroupAction::Reset { active_id: 120, groups: 2 }
-        );
-        // Same selection again: the stored active subgroup stands.
-        assert_eq!(
-            m.ensure(id2, second.clone()),
-            SubgroupAction::Cycle { active_id: 120, index: 0, groups: 2 }
-        );
-        // And Tab from here advances to the second subgroup.
-        assert_eq!(
-            m.press(id2, second.clone(), 1),
-            SubgroupAction::Cycle { active_id: 132, index: 1, groups: 2 }
-        );
+        let mut m = SubgroupModel::new(identity_of(&first), first.clone(), ptrs_of(&first));
+        let _ = press(&mut m, &first, 1);
+        assert_eq!(ensure(&mut m, &second), SubgroupAction::Reset {
+            active_id: 120, active_key: 1000, groups: 2
+        });
+        assert_eq!(ensure(&mut m, &second), SubgroupAction::Cycle {
+            active_id: 120, active_key: 1000, index: 0, groups: 2
+        });
+        assert_eq!(press(&mut m, &second, 1), SubgroupAction::Cycle {
+            active_id: 132, active_key: 1004, index: 1, groups: 2
+        });
     }
 
     #[test]
     fn ensure_is_inert_for_a_single_typed_selection() {
         let ids = vec![12u16; 5];
-        let id = identity_of(&ids);
-        let mut m = SubgroupModel::new(id, ids.clone());
-        assert!(matches!(m.ensure(id, ids.clone()), SubgroupAction::Inert));
+        let mut m = SubgroupModel::new(identity_of(&ids), ids.clone(), ptrs_of(&ids));
+        assert!(matches!(ensure(&mut m, &ids), SubgroupAction::Inert));
+    }
+
+    #[test]
+    fn burrowed_and_unburrowed_are_separate_subgroups_via_derived_ids() {
+        let ids = vec![7, 7, 0x8007];
+        let mut m = SubgroupModel::new(identity_of(&ids), ids.clone(), ptrs_of(&ids));
+        assert_eq!(press(&mut m, &ids, 1), SubgroupAction::Cycle {
+            active_id: 0x8007, active_key: 1008, index: 1, groups: 2
+        });
     }
 }

@@ -326,6 +326,11 @@ unsafe fn resolve_selection() -> bool {
     true
 }
 
+/// The client selection as raw pointers, for the casting hook.
+pub(crate) unsafe fn selection_ptrs() -> Option<(Vec<u16>, Vec<u32>)> {
+    read_selection()
+}
+
 /// Read the client selection as (unit ids, raw pointers), in selection order.
 /// Returns `None` when the selection is empty or the table is not ready.
 unsafe fn read_selection() -> Option<(Vec<u16>, Vec<u32>)> {

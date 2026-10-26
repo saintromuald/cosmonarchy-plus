@@ -10,6 +10,7 @@
 #![allow(dead_code)]
 
 pub mod antimeta;
+pub mod casting;
 pub mod config;
 pub mod draft;
 pub mod hotkeys;

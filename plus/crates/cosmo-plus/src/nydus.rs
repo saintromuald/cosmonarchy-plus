@@ -109,9 +109,11 @@ pub(crate) unsafe fn draw_world(buf: &mut [u8; 16]) {
     }
 }
 
-/// Draw the same numbers onto the minimap. The draw hook runs with the world
-/// surface current, so screen-fixed elements are expressed as `screen + camera`
-/// (the mod's scale_world maps `world - camera` onto the screen).
+/// Draw the same numbers onto the minimap. Called from hud.rs through the
+/// minimap dispatch — on the **screen buffer** after the zoom resample — so
+/// the minimap rect is in plain screen coordinates and the labels are
+/// screen-fixed (the old world-surface version added the camera, which
+/// pushed the labels out of view).
 pub(crate) unsafe fn draw_minimap(buf: &mut [u8; 16]) {
     let Some(local) = local_player() else {
         return;
@@ -127,7 +129,6 @@ pub(crate) unsafe fn draw_minimap(buf: &mut [u8; 16]) {
     if map_w <= 0 || map_h <= 0 || right <= left || bottom <= top {
         return;
     }
-    let (cx, cy) = camera();
     get_color_handle(text_color::WHITE);
     for p in &pairs {
         for &(x, y) in &[p.a, p.b] {
@@ -136,8 +137,8 @@ pub(crate) unsafe fn draw_minimap(buf: &mut [u8; 16]) {
             buf.fill(0);
             let label = format!("{}", p.number);
             let _ = write!(&mut buf[..], "{label}");
-            // Screen-fixed: undo the world transform the surface is drawn in.
-            bw_print_xy(buf.as_ptr(), mx + cx - 2, my + cy - 2);
+            // Centred on the point, screen-fixed.
+            bw_print_xy(buf.as_ptr(), mx - 2, my - 4);
         }
     }
 }

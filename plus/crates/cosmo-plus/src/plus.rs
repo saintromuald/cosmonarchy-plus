@@ -101,7 +101,7 @@ pub(crate) fn install() {
     // Camera hotkey labels (C1-C8 on the minimap): needs the gptp export.
     crate::cam_labels::install();
     crate::state::feature("camera-labels", crate::cam_labels::status());
-    // Larva picker (F12 by default; see larva_pick.rs). Needs the draw hook and
+    // Larva picker (CapsLock by default; see larva_pick.rs). Needs the draw hook and
     // installs its own keyboard hook for the count entry.
     crate::larva_pick::install();
     crate::state::feature("larva-pick", crate::larva_pick::status());
@@ -111,6 +111,14 @@ pub(crate) fn install() {
     // SC2-style Tab subgroup cycling (see tab_cycle.rs). Polled from the draw hook.
     crate::tab_cycle::install();
     crate::state::feature("tab-cycle", crate::tab_cycle::status());
+    // Screen-fixed HUD overlays (idle badge, Tab indicator, camera labels,
+    // nydus minimap numbers) on the minimap dialog's draw path.
+    if !crate::config::env_flag("CM_PLUS_NO_DRAW_HOOK") {
+        crate::hud::install();
+        crate::state::feature("hud-overlay", crate::hud::status());
+    } else {
+        crate::state::feature("hud-overlay", "disarmed: CM_PLUS_NO_DRAW_HOOK");
+    }
     // Dev REPL (CM_PLUS_REPL=1 only; inert otherwise).
     crate::repl::install();
     // SC2-style smart casting (CM_PLUS_SMART_CAST=1 only; inert otherwise).

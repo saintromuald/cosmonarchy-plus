@@ -133,8 +133,11 @@ unsafe fn resolve_screens_live() -> Option<usize> {
     Some(target)
 }
 
-/// Draw the C1–C8 labels onto the minimap. Called from the overlay draw pass
-/// (after the nydus minimap numbers; the small font is already selected).
+/// Draw the C1–C8 labels onto the minimap. Called from hud.rs through the
+/// minimap dispatch — on the **screen buffer** after the zoom resample — so
+/// the minimap rect and the label positions are plain screen coordinates
+/// (no camera term; the old world-surface version needed it and vanished
+/// inside the zoom crop).
 pub(crate) unsafe fn draw_minimap(buf: &mut [u8; 16]) {
     if crate::frame::frame_count() == 0 {
         return;
@@ -152,7 +155,6 @@ pub(crate) unsafe fn draw_minimap(buf: &mut [u8; 16]) {
     if map_w <= 0 || map_h <= 0 || right <= left || bottom <= top {
         return;
     }
-    let (cx, cy) = crate::overlay::camera();
     crate::overlay::get_color_handle(cosmo_plus_core::saturation::text_color::WHITE);
 
     for i in 0..CAMERA_CAP {
@@ -175,8 +177,7 @@ pub(crate) unsafe fn draw_minimap(buf: &mut [u8; 16]) {
         let label = format!("C{}", i + 1);
         let len = label.len().min(buf.len());
         buf[..len].copy_from_slice(&label.as_bytes()[..len]);
-        // Centred on the point (small font, 2 chars) — screen-fixed like the
-        // nydus minimap labels.
-        crate::overlay::bw_print_xy(buf.as_ptr(), mx + cx - 5, my + cy - 4);
+        // Centred on the point (small font, 2 chars).
+        crate::overlay::bw_print_xy(buf.as_ptr(), mx - 5, my - 4);
     }
 }

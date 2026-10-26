@@ -82,9 +82,10 @@ const CHANGES_LINES: &[&str] = &[
     "Ultraload: +50% move speed, 20-tile depot radius",
     "Zoom: player floor 100% instead of the default 200%",
     "Smart Tab: cycles the active subgroup (units and buildings)",
-    "Camera pan: CapsLock + WASD or arrow keys",
-    "Idle workers: F9 selects the next idle worker",
-    "Larva pick: F12, type a count, Enter",
+    "Camera pan: Ctrl + WASD or arrow keys",
+    "Idle workers: ` (backtick) selects the next idle worker",
+    "Larva pick: CapsLock, type a count, Enter",
+    "Minimap: C1-C8 camera labels and nydus canal numbers",
     "Saturation counts above your own town halls and gas",
     "Lobby: Anti Meta (46) and Draft (47) game types",
     "Netcode: rollback host/join (armed by the launcher)",
@@ -314,24 +315,19 @@ unsafe extern "stdcall" fn draw_hook(surface: *mut core::ffi::c_void, bounds: *m
     // Larva picker: fires the selection on a confirmed count, then draws its entry UI.
     crate::larva_pick::poll();
     crate::larva_pick::draw();
-    // Smart Tab: rotate the selection and rebuild the command card here in
-    // the draw pass (UI-safe), then confirm the engine's UI is aimed at the
-    // active subgroup. Never in the sim step — see frame.rs.
+    // Smart Tab: rotate the selection and drive the engine's card at the active
+    // subgroup here in the draw pass (UI-safe). Never in the sim step — see frame.rs.
     crate::tab_cycle::poll();
     crate::tab_cycle::apply_display();
-    // Tab indicator (drawn regardless of the saturation overlay switch).
-    draw_tab_indicator();
     // Rollback bug-capture confirmation (drawn regardless of the overlay switch).
     draw_capture_confirmation();
-    // Idle-worker counter above the minimap (SC2-style; drawn regardless of
-    // the overlay switch, like the tab indicator).
-    draw_idle_counter();
     // Dev REPL: poll the command file and draw transient probes.
     crate::repl::poll();
     crate::repl::draw();
-    // Nydus numbering + C1-C8 camera labels: world annotations that must be
-    // visible whenever a game runs, regardless of the saturation overlay
-    // switch or of whether the local player has any labelled nodes left.
+    // Nydus in-world numbers: world annotations that must be visible whenever a
+    // game runs, regardless of the saturation overlay switch. (The minimap
+    // labels, idle badge and Tab indicator are screen-fixed and draw through
+    // the minimap dispatch — see hud.rs — so the zoom crop never hides them.)
     draw_world_annotations();
     draw_pass();
     patch_game_menu();
@@ -339,11 +335,10 @@ unsafe extern "stdcall" fn draw_hook(surface: *mut core::ffi::c_void, bounds: *m
     draw_changes();
 }
 
-/// In-world / on-minimap annotations that are independent of the saturation
-/// overlay: nydus canal/exit numbers and the F1-F8 camera labels. Drawn every
-/// frame from the draw hook (never gated by the overlay switch or by an empty
-/// node list — a base whose patches are mined out still shows its Cesiant
-/// numbers).
+/// In-world annotations that are independent of the saturation overlay: the
+/// nydus canal/exit numbers above the buildings. Drawn every frame from the
+/// draw hook (never gated by the overlay switch or by an empty node list —
+/// a base whose patches are mined out still shows its Cesiant numbers).
 unsafe fn draw_world_annotations() {
     if crate::frame::frame_count() == 0 {
         return; // not in a game
@@ -357,8 +352,6 @@ unsafe fn draw_world_annotations() {
     *(G_PRINT_XY_ALIGNMENT as *mut u8) = 0x11;
     let mut buf = [0u8; 16];
     crate::nydus::draw_world(&mut buf);
-    crate::nydus::draw_minimap(&mut buf);
-    crate::cam_labels::draw_minimap(&mut buf);
     set_font_handle(core::ptr::null_mut());
 }
 
@@ -366,8 +359,11 @@ unsafe fn draw_world_annotations() {
 /// terrain toggle (the stock "Hide Terrain (Tab)" button): the first idle
 /// worker's command-card icon, scaled down to HUD size, plus the yellow count.
 /// With no idle worker it shows the local race's tier-1 worker icon and a grey 0.
-/// Independent of the saturation overlay switch.
-unsafe fn draw_idle_counter() {
+///
+/// Drawn by hud.rs through the minimap dispatch — on the **screen buffer**
+/// after the zoom resample — so plain screen coordinates are correct and the
+/// badge is visible at every zoom level.
+pub(crate) unsafe fn draw_idle_counter() {
     if crate::frame::frame_count() == 0 {
         return; // not in a game
     }
@@ -386,11 +382,11 @@ unsafe fn draw_idle_counter() {
 
     // Anchored to the minimap panel so it tracks the UI at any resolution:
     // left edge aligned with the terrain button, bottom edge just above the
-    // panel's button strip. `bw_print_xy`/`bw_print_icon` take SCREEN
-    // coordinates on the draw-hook surface (the nydus *world* labels subtract
-    // the camera to get here), so the badge is fixed on screen — no camera term.
-    // Validated minimap rect; when the global no longer holds sane values the
-    // badge falls back to a fixed screen spot instead of disappearing.
+    // panel's button strip. Drawn on the screen buffer (via hud.rs), so the
+    // pin is a plain screen position — no camera term, and no zoom crop to
+    // fall outside of. Validated minimap rect; when the global no longer
+    // holds sane values the badge falls back to a fixed screen spot instead
+    // of disappearing.
     let rect = crate::state::minimap_rect().unwrap_or([6, 348, 133, 475]);
     const ICON_W: i32 = 24;
     const ICON_H: i32 = 22;
@@ -449,8 +445,9 @@ fn tier1_worker_icon(race: u8) -> u32 {
 }
 
 /// The Tab subgroup indicator (`Tab 2/3 · Marines`), drawn for ~1.5 s after each Tab
-/// press. Independent of the saturation overlay switch.
-unsafe fn draw_tab_indicator() {
+/// press. Drawn by hud.rs through the minimap dispatch on the screen buffer, so the
+/// position is a plain screen coordinate and stays visible at every zoom.
+pub(crate) unsafe fn draw_tab_indicator() {
     let Some((active, total)) = crate::tab_cycle::indicator(crate::frame::frame_count()) else {
         return;
     };

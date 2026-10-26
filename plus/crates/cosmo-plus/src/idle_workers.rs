@@ -259,6 +259,13 @@ unsafe extern "system" fn keyboard_proc(code: i32, wparam: usize, lparam: isize)
     1 // swallow: the control group on this key never fires
 }
 
+/// Reset the per-game state (called when a new game starts). The selection
+/// cursor must not carry over between matches.
+pub(crate) fn reset() {
+    LAST_SELECTED.store(0, Ordering::SeqCst);
+    QUEUED.store(false, Ordering::SeqCst);
+}
+
 /// Queue a press from outside the keyboard path (the dev REPL's `idle` command).
 pub(crate) fn queue_press() {
     QUEUED.store(true, Ordering::SeqCst);

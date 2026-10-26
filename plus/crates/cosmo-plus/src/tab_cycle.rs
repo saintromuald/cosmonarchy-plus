@@ -506,6 +506,13 @@ pub(crate) unsafe fn poll() {
     ));
 }
 
+/// Reset the per-game state (called when a new game starts).
+pub(crate) fn reset() {
+    CYCLE.lock().unwrap().reset();
+    QUEUED.store(0, Ordering::SeqCst);
+    SHOW_UNTIL_FRAME.store(0, Ordering::SeqCst);
+}
+
 impl Cycle {
     fn reset(&mut self) {
         self.active = 0;

@@ -113,6 +113,8 @@ pub(crate) fn install() {
     crate::state::feature("tab-cycle", crate::tab_cycle::status());
     // Dev REPL (CM_PLUS_REPL=1 only; inert otherwise).
     crate::repl::install();
+    // SC2-style smart casting (CM_PLUS_SMART_CAST=1 only; inert otherwise).
+    crate::casting::install();
 
     // Boot integration report: resolve + verify every fixed global, dump the
     // feature/hook/config map to cosmo_plus.state.json (also reachable from the

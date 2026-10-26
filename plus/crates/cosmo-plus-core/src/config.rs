@@ -120,12 +120,33 @@ pub struct PlusConfig {
     pub mode: Option<String>,
     /// Draft-mode option tables (`draft:` section).
     pub draft: Vec<DraftOption>,
+    /// Per-unit-type cast modes (`cast-modes:` section, `"unit id": smart|all`).
+    /// `None` entries fall back to the SC2 default classification.
+    pub cast_modes: BTreeMap<String, crate::casting::CastMode>,
 }
 
 /// Parse `plus.yml` text into a [`PlusConfig`].
 pub fn parse_plus_yml(text: &str) -> Result<PlusConfig, String> {
     let root = yaml::parse(text)?;
     let mut cfg = PlusConfig::default();
+
+    if let Some(cm) = root.get("cast-modes") {
+        if let Yaml::Map(entries) = cm {
+            for (key, value) in entries {
+                let mode = match value.as_str().map(|v| v.to_ascii_lowercase()).as_deref() {
+                    Some("smart") => Some(crate::casting::CastMode::Smart),
+                    Some("all") => Some(crate::casting::CastMode::All),
+                    _ => None,
+                };
+                let Some(mode) = mode else {
+                    return Err(format!(
+                        "cast-modes.{key}: expected `smart` or `all`"
+                    ));
+                };
+                cfg.cast_modes.insert(key.clone(), mode);
+            }
+        }
+    }
 
     if let Some(ov) = root.get("overrides") {
         let Yaml::List(items) = ov else {

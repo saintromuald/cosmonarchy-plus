@@ -9,6 +9,7 @@
 mod antimeta;
 mod cam_pan;
 mod cam_labels;
+mod casting;
 mod config;
 mod crash;
 mod data;

@@ -1,8 +1,8 @@
-//! CapsLock + WASD camera pan.
+//! Ctrl + WASD camera pan.
 //!
-//! While CapsLock is **held**, W/A/S/D are swallowed and re-posted to the game window
+//! While Ctrl is **held**, W/A/S/D are swallowed and re-posted to the game window
 //! as Up/Left/Down/Right key events, so the camera pans like WASD panning in a modern
-//! RTS without moving the left hand. Release CapsLock and WASD behave normally again.
+//! RTS without moving the left hand. Release Ctrl and WASD behave normally again.
 //!
 //! The game's own wndproc processes the posted arrow events exactly like real key
 //! presses (down/up pairs, including auto-repeat while a key is held), so no engine
@@ -17,7 +17,7 @@ use windows_sys::Win32::UI::WindowsAndMessaging::{
 };
 use windows_sys::Win32::System::Threading::GetCurrentThreadId;
 
-const VK_CAPITAL: i32 = 0x14;
+const VK_CONTROL: i32 = 0x11;
 const VK_W: u32 = 0x57;
 const VK_A: u32 = 0x41;
 const VK_S: u32 = 0x53;
@@ -35,7 +35,7 @@ static ENABLED: AtomicBool = AtomicBool::new(false);
 /// Resolved status for the boot report.
 pub(crate) fn status() -> String {
     if ENABLED.load(Ordering::SeqCst) {
-        "armed (CapsLock + WASD)".to_string()
+        "armed (Ctrl + WASD)".to_string()
     } else {
         "disabled (hook failed or no window)".to_string()
     }
@@ -53,7 +53,7 @@ pub(crate) fn install() {
         if hwnd as usize != 0 {
             GAME_HWND.store(hwnd as usize, Ordering::SeqCst);
             crate::log::log(&format!(
-                "[cosmo-plus] cam pan: hold CapsLock and W/A/S/D pans the camera (window 0x{:x})",
+                "[cosmo-plus] cam pan: hold Ctrl and W/A/S/D pans the camera (window 0x{:x})",
                 hwnd as usize
             ));
         } else {
@@ -70,7 +70,7 @@ pub(crate) fn install() {
         );
         if h.is_null() {
             crate::log::log(
-                "[cosmo-plus] cam pan: SetWindowsHookEx failed; CapsLock+WASD pan disabled",
+                "[cosmo-plus] cam pan: SetWindowsHookEx failed; Ctrl+WASD pan disabled",
             );
             return;
         }
@@ -85,7 +85,7 @@ fn call_next(code: i32, wparam: usize, lparam: isize) -> isize {
     unsafe { CallNextHookEx(std::ptr::null_mut(), code, wparam, lparam) }
 }
 
-/// WH_KEYBOARD hook: while CapsLock is held, WASD is swallowed and mirrored into the
+/// WH_KEYBOARD hook: while Ctrl is held, WASD is swallowed and mirrored into the
 /// matching arrow key. Runs ahead of gptp's own hook (installed later = runs first).
 unsafe extern "system" fn keyboard_proc(code: i32, wparam: usize, lparam: isize) -> isize {
     if code < 0 || !ENABLED.load(Ordering::SeqCst) {
@@ -102,8 +102,8 @@ unsafe extern "system" fn keyboard_proc(code: i32, wparam: usize, lparam: isize)
     let Some(arrow) = arrow else {
         return call_next(code, wparam, lparam);
     };
-    let caps_held = (GetAsyncKeyState(VK_CAPITAL) as u16 & 0x8000) != 0;
-    if !caps_held {
+    let ctrl_held = (GetAsyncKeyState(VK_CONTROL) as u16 & 0x8000) != 0;
+    if !ctrl_held {
         return call_next(code, wparam, lparam);
     }
     // Only during a game (never swallow WASD in menus/dialogs).
@@ -124,5 +124,5 @@ unsafe extern "system" fn keyboard_proc(code: i32, wparam: usize, lparam: isize)
         let lp = if down { 0x0000_0001u32 } else { 0xC000_0001u32 };
         unsafe { PostMessageA(hwnd, msg, arrow as usize, lp as isize) };
     }
-    1 // swallow the original WASD event while CapsLock is held
+    1 // swallow the original WASD event while Ctrl is held
 }

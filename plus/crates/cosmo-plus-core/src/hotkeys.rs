@@ -4,9 +4,10 @@
 /// mod's hotkey layer (F1–F8 are camera screens, F10 the menu, F11 the HUD toggle).
 pub const DEFAULT_IDLE_WORKER_KEY: &str = "F9";
 
-/// Default larva-pick hotkey: F12 (VK 0x7B) — free in the game and the mod (F9 is
-/// now the idle-worker key, F10 the menu, F11 the HUD toggle).
-pub const DEFAULT_LARVA_KEY: &str = "F12";
+/// Default larva-pick hotkey: CapsLock (VK 0x14) — free in the game and the
+/// mod, and next to the digits for quick counts (CapsLock, 3, 3, Enter = 33
+/// larva). The key-down is swallowed, so the OS caps toggle never flips.
+pub const DEFAULT_LARVA_KEY: &str = "CAPSLOCK";
 
 /// Default subgroup-cycle hotkey: Tab (VK 0x09). Unbound everywhere in stock Brood
 /// War and in the mod's hotkey layer (the engine's key handler ignores it — see
@@ -55,6 +56,7 @@ pub fn parse_key(name: &str) -> Option<u16> {
     Some(match upper.as_str() {
         "SPACE" => 0x20,
         "TAB" => 0x09,
+        "CAPSLOCK" | "CAPS" | "CAPITAL" => 0x14,
         "HOME" => 0x24,
         "END" => 0x23,
         "DELETE" => 0x2E,
@@ -109,6 +111,8 @@ mod tests {
         assert_eq!(parse_key("z"), Some(0x5A));
         assert_eq!(parse_key("7"), Some(0x37));
         assert_eq!(parse_key("SPACE"), Some(0x20));
+        assert_eq!(parse_key("CAPSLOCK"), Some(0x14));
+        assert_eq!(parse_key("caps"), Some(0x14));
         assert_eq!(parse_key("Home"), Some(0x24));
         assert_eq!(parse_key("0x7A"), Some(0x7A));
         assert_eq!(parse_key("Pause"), Some(0x13));

@@ -145,6 +145,40 @@ impl SubgroupModel {
             groups,
         }
     }
+
+    /// Feed the per-frame view of the selection (no key press). A changed
+    /// identity resets to the first subgroup (SC2's fresh-selection rule, so a
+    /// mixed selection shows the first subgroup's card even before any Tab);
+    /// otherwise the stored active subgroup stands — the array may have been
+    /// reordered underneath (the engine re-copies its canonical selection
+    /// order on its own events), so the ids are refreshed.
+    pub fn ensure(&mut self, identity: u64, ids: Vec<u16>) -> SubgroupAction {
+        let fresh = identity != self.identity;
+        if fresh {
+            self.identity = identity;
+            self.ids = ids;
+            self.active = 0;
+        } else {
+            self.ids = ids;
+        }
+        let runs = subgroup_runs(&self.ids);
+        if runs.len() < 2 {
+            return SubgroupAction::Inert;
+        }
+        let groups = runs.len() as u32;
+        if fresh {
+            return SubgroupAction::Reset {
+                active_id: runs[0].unit_id,
+                groups,
+            };
+        }
+        let active = self.active.min(groups - 1);
+        SubgroupAction::Cycle {
+            active_id: runs[active as usize].unit_id,
+            index: active,
+            groups,
+        }
+    }
 }
 
 #[cfg(test)]
@@ -240,5 +274,39 @@ mod tests {
         let id = identity_of(&ids);
         let mut m = SubgroupModel::new(id, ids.clone());
         assert_eq!(m.group_count(), 3);
+    }
+
+    #[test]
+    fn ensure_resets_on_a_fresh_selection_without_advancing() {
+        let first = vec![106, 106, 120];
+        let second = vec![120, 132];
+        let id1 = identity_of(&first);
+        let id2 = identity_of(&second);
+        let mut m = SubgroupModel::new(id1, first.clone());
+        let _ = m.press(id1, first.clone(), 1);
+        // The per-frame view sees a fresh selection: back to the first
+        // subgroup, no advance.
+        assert_eq!(
+            m.ensure(id2, second.clone()),
+            SubgroupAction::Reset { active_id: 120, groups: 2 }
+        );
+        // Same selection again: the stored active subgroup stands.
+        assert_eq!(
+            m.ensure(id2, second.clone()),
+            SubgroupAction::Cycle { active_id: 120, index: 0, groups: 2 }
+        );
+        // And Tab from here advances to the second subgroup.
+        assert_eq!(
+            m.press(id2, second.clone(), 1),
+            SubgroupAction::Cycle { active_id: 132, index: 1, groups: 2 }
+        );
+    }
+
+    #[test]
+    fn ensure_is_inert_for_a_single_typed_selection() {
+        let ids = vec![12u16; 5];
+        let id = identity_of(&ids);
+        let mut m = SubgroupModel::new(id, ids.clone());
+        assert!(matches!(m.ensure(id, ids.clone()), SubgroupAction::Inert));
     }
 }

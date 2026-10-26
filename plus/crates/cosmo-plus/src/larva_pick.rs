@@ -1,10 +1,12 @@
 //! "Pick N larva" hotkey.
 //!
-//! Press the larva key (default F12, unbound in the game and the mod), type 1–2
-//! digits, confirm (Enter or the 2 s timeout) → exactly that many larva of the
-//! currently selected hatcheries are selected, clamped to the engine's 12-unit
-//! selection cap. An empty entry at timeout selects all larva (the mod's Select
-//! Larva button behaviour).
+//! Press the larva key (default **CapsLock**, unbound in the game and the
+//! mod), type a count (`CapsLock, 3, 3` = 33), confirm (Enter or the 2 s
+//! timeout) → exactly that many larva of the currently selected hatcheries
+//! are selected, up to the engine's extended 240-unit selection cap. An empty
+//! entry at timeout selects all larva (the mod's Select Larva button
+//! behaviour). A fresh CapsLock press always starts a new entry, so a count
+//! already typed can be replaced (`50` then `CapsLock, 3` = 3).
 //!
 //! While the entry window is open, the digit keys are **consumed** by a thread
 //! keyboard hook (installed after gptp's, so it runs first) — without this, typing
@@ -25,17 +27,14 @@ use bw_dat::structs::Unit;
 use cosmo_plus_core::hotkeys::{parse_key, DEFAULT_LARVA_KEY};
 use cosmo_plus_core::larva::{Entry, ENTRY_TIMEOUT_MS};
 
-/// `g_client_selection_group` — the client's current selection, `UnitsSel` of 12
-/// `Unit*` in place (ccmu.h: `new_client_selection_group // 00597208`).
-const CLIENT_SELECTION: usize = 0x00597208;
-/// `g_client_selection_count` (u8).
-const CLIENT_SELECTION_COUNT: usize = 0x0059723D;
 /// `Unit.connected_unit` — larva store a reference to the hatchery that made them
 /// (`BW/structures/UnitLayout.h`: `/*0x080*/ Unit* connected_unit`).
 const UNIT_CONNECTED_UNIT: usize = 0x080;
 /// Larva unit ids (`BW/enumerations/UnitId.h`).
 const ID_ZERG_LARVA: u16 = 35;
 const ID_ZERG_OCSAL_LARVA: u16 = 353;
+/// The extended selection limit (the engine's 240-unit cap; ccmu extender).
+const SELECTION_LIMIT: usize = 240;
 
 /// The resolved larva key VK (0 = disabled), set once at install.
 static KEY_VK: AtomicU16 = AtomicU16::new(0);
@@ -82,7 +81,7 @@ pub(crate) fn install() {
             KEY_VK.store(vk, Ordering::SeqCst);
             crate::log::log(&format!(
                 "[cosmo-plus] larva pick: key {name} (VK 0x{vk:02X}); press it, type a \
-                 count (1-99, clamped to 12), Enter or wait to select"
+                 count (1-99), Enter or wait to select"
             ));
         }
         None => crate::log::log(&format!(
@@ -228,16 +227,17 @@ pub(crate) unsafe fn poll() {
     *ENTRY.lock().unwrap() = Entry::default();
     let want = entry.confirmed(); // None = select all
 
-    // The hatcheries are the client's current selection.
-    let mut hatcheries: Vec<*mut Unit> = Vec::with_capacity(12);
-    let sel = CLIENT_SELECTION as *const u32;
-    let count = core::ptr::read(CLIENT_SELECTION_COUNT as *const u8) as usize;
-    for i in 0..count.min(12) {
-        let p = core::ptr::read(sel.add(i)) as *mut Unit;
-        if !p.is_null() {
-            hatcheries.push(p);
-        }
-    }
+    // The hatcheries are the client's current selection (the extended table —
+    // the 12-slot vanilla table would miss part of a big selection).
+    let Some((_ids, sel_ptrs)) = crate::tab_cycle::selection_ptrs() else {
+        crate::log::log("[cosmo-plus] larva pick: nothing selected (select hatcheries first)");
+        return;
+    };
+    let hatcheries: Vec<*mut Unit> = sel_ptrs
+        .iter()
+        .map(|&p| p as *mut Unit)
+        .filter(|&p| !p.is_null())
+        .collect();
     if hatcheries.is_empty() {
         crate::log::log("[cosmo-plus] larva pick: nothing selected (select hatcheries first)");
         return;
@@ -245,10 +245,9 @@ pub(crate) unsafe fn poll() {
 
     // Gather larva: connected_unit points at one of the selected hatcheries and the
     // unit id is a larva type; hidden larva are skipped (same rule as the mod).
-    let mut list: [*mut Unit; 12] = [core::ptr::null_mut(); 12];
-    let mut n = 0usize;
+    let mut list: Vec<*mut Unit> = Vec::new();
     crate::frame::for_each_unit(|u| {
-        if n >= 12 {
+        if list.len() >= SELECTION_LIMIT {
             return;
         }
         let id = (*u).unit_id;
@@ -263,10 +262,10 @@ pub(crate) unsafe fn poll() {
         if sprite.is_null() || (*sprite).visibility_mask == 0 {
             return;
         }
-        list[n] = u;
-        n += 1;
+        list.push(u);
     });
 
+    let n = list.len();
     if n == 0 {
         crate::log::log("[cosmo-plus] larva pick: selected hatcheries have no larva");
         return;

@@ -9,15 +9,25 @@
 //!     hotkeys, while plain orders (move/attack/stop) still go to every selected unit;
 //!   * selecting fresh resets to the first subgroup.
 //!
-//! Brood War has no subgroup concept, so this emulates it by **rotating the engine's
-//! own client selection array**: the active subgroup's units are moved to the front,
-//! so `selection[0]` — the unit the command card, spell hotkeys and portrait all
-//! derive from — belongs to the active subgroup. Spells therefore dispatch from the
-//! subgroup you Tab to (press Z with Mavericks active = Stim, Tab, press Z = the
-//! Phalanx siege), while the selection multiset never changes, so move/attack orders
-//! still reach every selected unit. The rotation is purely viewer-local (the client
-//! selection table is not part of the synced game state and no select command or
-//! sound is generated), matching how SC2 keeps the subgroup state per player.
+//! Brood War has no subgroup concept, so this drives the engine's own card
+//! pipeline the way the fork's buttonset code reads it:
+//!
+//!   * `get_selected_unit()` (buttonsets.cpp) = the **first completed unit in
+//!     `g_client_selection_group`** — the client selection table. So the active
+//!     subgroup is made first by **rotating that table** (viewer-local: the table
+//!     is not part of the synced game state).
+//!   * Mixed selections otherwise get the generic `Buttons_GroupMixed` card
+//!     (update_buttonset_ex). The override writes `g_current_buttonset_id` =
+//!     the active subgroup unit's `current_buttonset`, so every frame the fork's
+//!     `update_current_buttonset` (0x004599A0) binds the subgroup's full card.
+//!   * The portrait/wireframe (`g_active_portrait_unit`) follows the same unit,
+//!     and spell dispatch reads the same pointer, so hotkeys route to the
+//!     active subgroup exactly like SC2.
+//!
+//! The engine re-copies its canonical selection order (`active_player_selection`)
+//! and re-derives GroupMixed on its own events, so `apply_display` re-asserts the
+//! rotation + override every frame while the cycle is active (guarded by the
+//! selection identity, so a fresh selection resets to the first subgroup).
 //!
 //! The Tab key is **swallowed** by a thread keyboard hook (installed after gptp's,
 //! so it runs first) while in a game — stock Brood War binds Tab to hiding the
@@ -57,6 +67,26 @@ const POPUP_DIALOG: usize = 0x006D5BF4;
 /// panel and command buttons display. Written from the draw pass to highlight the
 /// active subgroup.
 const G_ACTIVE_PORTRAIT_UNIT: usize = 0x00597248;
+/// `g_current_buttonset_id` (s16, buttonsets.h) — the card's buttonset id; the
+/// fork's per-frame `update_current_buttonset` reads it. The override writes the
+/// active subgroup's buttonset here so the card shows that subgroup's spells
+/// instead of the mixed-selection GroupMixed card.
+const G_CURRENT_BUTTONSET_ID: usize = 0x0068C1C4;
+/// `update_current_buttonset` (0x004599A0, buttonsets.h) — the fork's card
+/// updater, replaced by a jump (E9) to its C++ reimplementation. Called after
+/// writing the override so the card rebuilds from the active subgroup.
+const ADDR_UPDATE_CURRENT_BUTTONSET: usize = 0x004599A0;
+/// `update_buttonset` (0x00458DE0) — re-derives the stock card; called once
+/// when the cycle deactivates so the engine's own card (single or GroupMixed)
+/// comes back.
+const ADDR_UPDATE_BUTTONSET: usize = 0x00458DE0;
+static UPDATE_CURRENT_BUTTONSET_ADDR: u32 = ADDR_UPDATE_CURRENT_BUTTONSET as u32;
+static UPDATE_BUTTONSET_ADDR: u32 = ADDR_UPDATE_BUTTONSET as u32;
+/// Whether the fork's jump patch is present at `update_current_buttonset`
+/// (checked at install): only then is calling the address register-safe. On an
+/// unpatched build the card override is skipped (the cycle still rotates the
+/// table and aims the portrait).
+static CARD_READY: AtomicBool = AtomicBool::new(false);
 
 /// Immediates the selection extender rewrites with the runtime address of
 /// `ccmu_extender.new_client_selection_group` and of its one-past-end slot.
@@ -192,6 +222,14 @@ pub(crate) fn install() {
     // during the menu boot and is logged for the headless probe.
     unsafe {
         resolve_selection();
+        // The card override needs the fork's jump-patched update_current_buttonset:
+        // calling the vanilla function with our register state would be unsafe.
+        let first = std::ptr::read(ADDR_UPDATE_CURRENT_BUTTONSET as *const u8);
+        CARD_READY.store(first == 0xE9, Ordering::SeqCst);
+        crate::log::log(&format!(
+            "[cosmo-plus] tab cycle: card override {} (update_current_buttonset first byte 0x{first:02X})",
+            if CARD_READY.load(Ordering::SeqCst) { "armed" } else { "disabled" }
+        ));
     }
 }
 
@@ -411,9 +449,9 @@ unsafe fn selftest_selection() -> Option<(Vec<u16>, Vec<u32>)> {
 }
 
 /// Called from the draw pass each frame (like `idle_workers::poll`). Consumes the
-/// key presses queued by the keyboard hook and rotates the engine's client
-/// selection array so the next subgroup's units come first (selection[0] = the
-/// unit whose spells/buttons the command card shows and dispatches).
+/// key presses queued by the keyboard hook and makes the next subgroup active:
+/// rotate the client selection table so the subgroup is first, then drive the
+/// engine's own card pipeline at it (portrait + buttonset override + rebuild).
 pub(crate) unsafe fn poll() {
     let frame = crate::frame::frame_count();
     if frame == 0 {
@@ -447,62 +485,42 @@ pub(crate) unsafe fn poll() {
         model.press(identity, ids.clone(), dir)
     };
 
-    let (active, groups, active_id, rotate_run): (u32, u32, u16, Option<SubgroupRun>) =
-        match action {
-            SubgroupAction::Inert => {
-                if crate::config::env_flag("CM_PLUS_TAB_DEBUG") {
-                    crate::log::log("[cosmo-plus] tab cycle debug: single subgroup, Tab inert");
-                }
-                return;
+    let (active, groups, active_id): (u32, u32, u16) = match action {
+        SubgroupAction::Inert => {
+            if crate::config::env_flag("CM_PLUS_TAB_DEBUG") {
+                crate::log::log("[cosmo-plus] tab cycle debug: single subgroup, Tab inert");
             }
-            SubgroupAction::Reset { active_id, groups } => {
-                // Fresh selection: SC2 shows the first subgroup, which is
-                // already at the front of the array — nothing to rotate.
-                if crate::config::env_flag("CM_PLUS_TAB_DEBUG") {
-                    crate::log::log(&format!(
-                        "[cosmo-plus] tab cycle debug: fresh selection (first subgroup {active_id})"
-                    ));
-                }
-                (0, groups, active_id, None)
-            }
-            SubgroupAction::Cycle {
-                active_id,
-                index,
-                groups,
-            } => {
-                // Locate the active group's run in the CURRENT (possibly
-                // rotated) array and rotate it to the front.
-                let runs = subgroup_runs(&ids);
-                let run = runs
-                    .iter()
-                    .find(|r| r.unit_id == active_id)
-                    .or_else(|| runs.get(index as usize))
-                    .cloned();
-                (index, groups, active_id, run)
-            }
-        };
-
-    if !selftest {
-        if let Some(run) = &rotate_run {
-            // Rotate the engine's own selection array: the chosen subgroup
-            // first, everything else after it, order preserved. No select
-            // command and no sound — this is viewer-local, exactly like SC2's
-            // subgroup pointer. Then rebuild the command card from the rotated
-            // array, so the active subgroup's spells/build buttons are the
-            // ones on the card and the hotkeys dispatch to them.
-            rotate_selection(run.start, run.len, ids.len());
-            refresh_command_card();
+            return;
         }
-    }
+        SubgroupAction::Reset { active_id, groups } => {
+            if crate::config::env_flag("CM_PLUS_TAB_DEBUG") {
+                crate::log::log(&format!(
+                    "[cosmo-plus] tab cycle debug: fresh selection (first subgroup {active_id})"
+                ));
+            }
+            (0, groups, active_id)
+        }
+        SubgroupAction::Cycle {
+            active_id,
+            index,
+            groups,
+        } => (index, groups, active_id),
+    };
+
+    // The active subgroup's run in the CURRENT (possibly engine-reordered)
+    // array; make it first and aim the engine's card at it.
+    let runs = subgroup_runs(&ids);
+    let Some(run) = runs.iter().find(|r| r.unit_id == active_id) else {
+        return;
+    };
+    let rep = if selftest { 0 } else { apply_subgroup(run, &ptrs) };
 
     {
         let mut d = DISPLAY.lock().unwrap();
         d.active = active;
         d.groups = groups;
         d.active_id = active_id;
-        d.active_ptr = ptrs.get(rotate_run.as_ref().map(|r| r.start).unwrap_or(0))
-            .copied()
-            .unwrap_or(0);
+        d.active_ptr = rep;
     }
     SHOW_UNTIL_FRAME.store(frame.saturating_add(INDICATOR_FRAMES), Ordering::SeqCst);
     crate::log::log(&format!(
@@ -510,10 +528,53 @@ pub(crate) unsafe fn poll() {
         active + 1,
         groups,
         active_id,
-        ptrs.get(rotate_run.as_ref().map(|r| r.start).unwrap_or(0))
-            .copied()
-            .unwrap_or(0),
+        ptrs.get(run.start).copied().unwrap_or(0),
     ));
+}
+
+/// Rotate the subgroup run to the front of the client table, then drive the
+/// engine's card at the run's representative unit. Returns that unit pointer.
+unsafe fn apply_subgroup(run: &SubgroupRun, ptrs: &[u32]) -> u32 {
+    if run.start != 0 {
+        rotate_selection(run.start, run.len, ptrs.len());
+    }
+    let rep = representative(run, ptrs);
+    write_card(rep);
+    rep
+}
+
+/// The engine's card builder (`get_selected_unit`) skips units still under
+/// construction, so the representative mirrors that: the run's first completed
+/// unit, falling back to the run's first unit.
+unsafe fn representative(run: &SubgroupRun, ptrs: &[u32]) -> u32 {
+    let end = (run.start + run.len).min(ptrs.len());
+    for i in run.start..end {
+        let unit = ptrs[i] as *mut Unit;
+        if (*unit).remaining_build_time == 0 {
+            return ptrs[i];
+        }
+    }
+    ptrs[run.start.min(ptrs.len().saturating_sub(1))]
+}
+
+/// Aim the portrait and the card at the active subgroup's unit: the engine's
+/// per-frame `update_current_buttonset` binds `g_current_buttonset_id` (our
+/// override) while the first completed unit of the table (our representative)
+/// supplies the card's per-unit state, so the subgroup's spells show and
+/// dispatch exactly like SC2.
+unsafe fn write_card(rep: u32) {
+    let unit = rep as *mut Unit;
+    std::ptr::write(G_ACTIVE_PORTRAIT_UNIT as *mut u32, rep);
+    std::ptr::write(G_CURRENT_BUTTONSET_ID as *mut u16, (*unit).buttons);
+    if CARD_READY.load(Ordering::SeqCst) {
+        core::arch::asm!(
+            "pushad",
+            "call dword ptr [{func}]",
+            "popad",
+            func = sym UPDATE_CURRENT_BUTTONSET_ADDR,
+            options(nostack),
+        );
+    }
 }
 
 /// Reset the per-game state (called when a new game starts).
@@ -529,50 +590,91 @@ pub(crate) fn reset() {
     SHOW_UNTIL_FRAME.store(0, Ordering::SeqCst);
 }
 
-/// Whether `ptr` is among the units in the engine's client selection right
-/// now (used to end the subgroup cycle once the selection changes). Reads the
-/// table directly — no allocation, safe to run every frame.
-unsafe fn selection_contains(ptr: u32) -> bool {
-    if !resolve_selection() {
-        return false;
+/// Called from the draw pass every frame (after `poll`): the per-frame view
+/// that keeps the engine aimed at the active subgroup. On a fresh selection
+/// (identity change) it resets to the first subgroup — SC2 shows the first
+/// subgroup's card the moment a mixed selection is made, before any Tab. While
+/// the cycle is active it re-asserts the rotation and card override whenever
+/// the engine re-copied its canonical selection order or re-derived the
+/// GroupMixed card (its own selection-change events).
+pub(crate) unsafe fn apply_display() {
+    if crate::frame::frame_count() == 0 {
+        return;
     }
-    let base = SEL_BASE.load(Ordering::SeqCst);
-    if base == 0 {
-        return false;
-    }
-    let limit = SEL_LIMIT.load(Ordering::SeqCst).max(1);
-    let count = (std::ptr::read(CLIENT_SELECTION_COUNT as *const u8) as usize).min(limit);
-    let list = base as *const *mut Unit;
-    for i in 0..count {
-        let unit = *list.add(i);
-        if unit.is_null() {
-            break;
+    let Some((ids, ptrs)) = read_selection() else {
+        deactivate();
+        return;
+    };
+    let identity = selection_identity(&ptrs);
+    let action = {
+        let mut guard = MODEL.lock().unwrap();
+        let model = guard
+            .get_or_insert_with(|| SubgroupModel::new(identity, ids.clone()));
+        model.ensure(identity, ids.clone())
+    };
+    let active_id = match action {
+        SubgroupAction::Inert => {
+            deactivate();
+            return;
         }
-        if unit as u32 == ptr {
-            return true;
-        }
+        SubgroupAction::Reset { active_id, .. } => active_id,
+        SubgroupAction::Cycle { active_id, .. } => active_id,
+    };
+
+    let runs = subgroup_runs(&ids);
+    let Some(run) = runs.iter().find(|r| r.unit_id == active_id) else {
+        deactivate();
+        return;
+    };
+    let rep = representative(&run, &ptrs);
+
+    // Re-assert only when the engine clobbered our state: the run moved
+    // (canonical re-copy), the portrait was re-derived, or the buttonset id
+    // was reset to GroupMixed. Otherwise the card already shows the subgroup
+    // and a per-frame rebuild would only flicker.
+    let portrait = std::ptr::read(G_ACTIVE_PORTRAIT_UNIT as *const u32);
+    let card = std::ptr::read(G_CURRENT_BUTTONSET_ID as *const u16);
+    let ok = run.start == 0
+        && portrait == rep
+        && card == (*(rep as *mut Unit)).buttons;
+    if !ok {
+        apply_subgroup(&run, &ptrs);
     }
-    false
+
+    {
+        let mut d = DISPLAY.lock().unwrap();
+        d.active = if runs.is_empty() {
+            0
+        } else {
+            runs.iter()
+                .position(|r| r.unit_id == active_id)
+                .unwrap_or(0) as u32
+        };
+        d.groups = runs.len() as u32;
+        d.active_id = active_id;
+        d.active_ptr = rep;
+    }
 }
 
-/// `update_selected_unit_data` (0x004C38B0) — the engine's own routine that
-/// rebuilds the command card, portrait and stats panel from the client
-/// selection. Called after every rotation so the active subgroup's abilities
-/// (and a building's build/upgrade buttons) win the card, exactly like SC2's
-/// subgroup swap.
-const ADDR_UPDATE_SELECTED_UNIT_DATA: usize = 0x004C38B0;
-static UPDATE_SELECTED_UNIT_DATA_ADDR: u32 = ADDR_UPDATE_SELECTED_UNIT_DATA as u32;
-
-/// Re-run the engine's selection-derived UI update (client-side only; the
-/// simulation state is untouched).
-unsafe fn refresh_command_card() {
-    core::arch::asm!(
-        "pushad",
-        "call dword ptr [{func}]",
-        "popad",
-        func = sym UPDATE_SELECTED_UNIT_DATA_ADDR,
-        options(nostack),
-    );
+/// Leave the active-cycle state: restore the engine's own card (single-unit or
+/// GroupMixed) once, then clear the display. No-op while already inactive.
+unsafe fn deactivate() {
+    let mut d = DISPLAY.lock().unwrap();
+    if d.groups >= 2 {
+        d.active = 0;
+        d.groups = 0;
+        d.active_id = 0;
+        d.active_ptr = 0;
+        if CARD_READY.load(Ordering::SeqCst) {
+            core::arch::asm!(
+                "pushad",
+                "call dword ptr [{func}]",
+                "popad",
+                func = sym UPDATE_BUTTONSET_ADDR,
+                options(nostack),
+            );
+        }
+    }
 }
 
 /// Rotate the engine's client selection array so the run
@@ -598,35 +700,6 @@ unsafe fn rotate_selection(run_start: usize, run_len: usize, count: usize) -> bo
         *list.add(i) = p as *mut Unit;
     }
     true
-}
-
-/// Called from the draw pass every frame (after `poll`): while a cycle is
-/// active, confirm the engine's UI is aimed at the active subgroup's unit.
-/// After the rotation, `selection[0]` already IS that unit, so the engine
-/// re-derives the wireframe, stats panel and command buttons from it on its
-/// own; the write is a belt-and-braces nudge for engine paths that only
-/// refresh `g_active_portrait_unit` on selection-change events.
-///
-/// The write is guarded by a membership check: the cycle only applies while
-/// its unit is still in the current selection. Without the guard, selecting
-/// anything else (or the unit dying) leaves the stale portrait write running
-/// every frame, the command card keeps aiming at the old unit and its
-/// abilities stop working.
-pub(crate) unsafe fn apply_display() {
-    let mut d = DISPLAY.lock().unwrap();
-    if d.groups < 2 || d.active_ptr == 0 {
-        return;
-    }
-    if !selection_contains(d.active_ptr) {
-        *d = Display {
-            active: 0,
-            groups: 0,
-            active_id: 0,
-            active_ptr: 0,
-        };
-        return;
-    }
-    std::ptr::write(G_ACTIVE_PORTRAIT_UNIT as *mut u32, d.active_ptr);
 }
 
 /// Indicator state for the overlay: `Some((active, total))` while the Tab indicator

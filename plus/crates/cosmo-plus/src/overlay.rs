@@ -330,11 +330,9 @@ unsafe extern "stdcall" fn draw_hook(surface: *mut core::ffi::c_void, bounds: *m
     // the minimap dispatch — see hud.rs — so the zoom crop never hides them.)
     draw_world_annotations();
     draw_pass();
-    // Screen-fixed HUD overlays on the world surface: visible at 100% zoom
-    // (the only zoom where this surface is presented directly); at magnified
-    // zoom the deferred-screen-text hook (hud.rs) draws them on the screen
-    // buffer instead, and this copy falls outside the zoom crop.
-    crate::hud::draw_overlays();
+    // Screen-fixed HUD overlays on the world surface, mapped into the zoom
+    // crop (identity at 100%): visible at every zoom level.
+    crate::hud::draw_overlays(surface, bounds);
     // One-shot abilities dump (CM_PLUS_DUMP_ABILITIES=1): unit -> buttons ->
     // orders map for the smart-cast classification.
     crate::abilities::dump_once();
@@ -411,6 +409,7 @@ pub(crate) unsafe fn draw_idle_counter() {
     ));
     let screen_x = pin_x;
     let screen_y = pin_y;
+    let (screen_x, screen_y) = crate::hud::screen_to_surface(screen_x, screen_y);
 
     set_font_handle(font);
     write_draw_text(0, 0, 0x7FFF, 0x7FFF);
@@ -489,9 +488,10 @@ pub(crate) unsafe fn draw_tab_indicator() {
         format!("Tab {active}/{total} \u{b7} {short}")
     };
     let _ = write!(&mut buf[..], "{label}");
-    // Screen-fixed: bw_print_xy takes screen coordinates on this surface —
-    // adding the camera pushed the indicator thousands of pixels off-screen.
-    bw_print_xy(buf.as_ptr(), 60, 250);
+    // Screen-fixed via the zoom mapping: at magnified zoom this lands in the
+    // crop region that actually reaches the screen.
+    let (x, y) = crate::hud::screen_to_surface(60, 250);
+    bw_print_xy(buf.as_ptr(), x, y);
     set_font_handle(core::ptr::null_mut());
 }
 

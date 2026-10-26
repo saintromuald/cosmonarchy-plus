@@ -137,8 +137,9 @@ pub(crate) unsafe fn draw_minimap(buf: &mut [u8; 16]) {
             buf.fill(0);
             let label = format!("{}", p.number);
             let _ = write!(&mut buf[..], "{label}");
-            // Centred on the point, screen-fixed.
-            bw_print_xy(buf.as_ptr(), mx - 2, my - 4);
+            // Centred on the point, screen-fixed via the zoom mapping.
+            let (sx, sy) = crate::hud::screen_to_surface(mx - 2, my - 4);
+            bw_print_xy(buf.as_ptr(), sx, sy);
         }
     }
 }

@@ -2,6 +2,29 @@
 
 use bw_dat::structs::Unit;
 
+/// The game's own "center on this unit" routine (0x004E6020) — the path the
+/// portrait double-click and Ctrl+C use. It reads the unit's sprite position,
+/// computes the zoom-aware centered camera (tile-aligned, minus half the
+/// viewport) and calls move_screen itself. ABI: `eax = Unit*`, no stack args.
+/// This is the unit-specific centering — move_screen alone takes a camera
+/// position, which is why raw unit positions landed the view elsewhere.
+const ADDR_MOVE_SCREEN_TO_UNIT: usize = 0x004E6020;
+static MOVE_SCREEN_TO_UNIT_ADDR: u32 = ADDR_MOVE_SCREEN_TO_UNIT as u32;
+
+/// Center the camera on a unit through the engine's own routine (zoom-aware
+/// in the widescreen build).
+pub(crate) unsafe fn move_screen_to_unit(unit: *mut Unit) {
+    core::arch::asm!(
+        "pushad",
+        "mov eax, {unit}",
+        "call dword ptr [{func}]",
+        "popad",
+        unit = in(reg) unit,
+        func = sym MOVE_SCREEN_TO_UNIT_ADDR,
+        options(nostack),
+    );
+}
+
 /// `helper::move_screen` (0x0049C440) — centers the view on world-px (x, y),
 /// clamped by the engine's scroll limits. Register ABI from `bwhelper.cpp`:
 /// `movzx eax, x; movzx ecx, y; call`.

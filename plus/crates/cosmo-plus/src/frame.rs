@@ -43,6 +43,9 @@ static LAST_GAME_PTR: std::sync::atomic::AtomicUsize = std::sync::atomic::Atomic
 /// The per-frame callback.
 unsafe extern "C" fn tick() {
     unsafe {
+        // One-shot abilities dump: fires on the first sim tick even when the
+        // draw pass never runs (headless freeze at match start).
+        crate::abilities::dump_once();
         {
             let api = crate::plus::api();
             let game = (api.game)().map(|f| f() as usize).unwrap_or(0);

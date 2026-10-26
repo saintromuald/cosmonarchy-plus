@@ -6,6 +6,7 @@
 
 #![allow(dead_code, non_snake_case)]
 
+mod abilities;
 mod antimeta;
 mod cam_pan;
 mod cam_labels;

@@ -330,6 +330,9 @@ unsafe extern "stdcall" fn draw_hook(surface: *mut core::ffi::c_void, bounds: *m
     // the minimap dispatch — see hud.rs — so the zoom crop never hides them.)
     draw_world_annotations();
     draw_pass();
+    // One-shot abilities dump (CM_PLUS_DUMP_ABILITIES=1): unit -> buttons ->
+    // orders map for the smart-cast classification.
+    crate::abilities::dump_once();
     patch_game_menu();
     poll_changes();
     draw_changes();
@@ -975,7 +978,7 @@ unsafe extern "fastcall" fn changes_menu_interact(
 }
 
 /// True when [ptr, ptr+len) is committed, readable memory (VirtualQuery).
-fn readable(ptr: *const u8, len: usize) -> bool {
+pub(crate) fn readable_ptr(ptr: *const u8, len: usize) -> bool {
     use windows_sys::Win32::System::Memory::{
         VirtualQuery, MEMORY_BASIC_INFORMATION, MEM_COMMIT, PAGE_GUARD, PAGE_NOACCESS,
     };
@@ -999,12 +1002,12 @@ fn readable(ptr: *const u8, len: usize) -> bool {
 
 /// Bounded, guard-checked C string read.
 fn read_cstr(ptr: *const u8, max: usize) -> Option<Vec<u8>> {
-    if !readable(ptr, 1) {
+    if !readable_ptr(ptr, 1) {
         return None;
     }
     let mut out = Vec::with_capacity(max.min(64));
     for i in 0..max {
-        if !readable(unsafe { ptr.add(i) }, 1) {
+        if !readable_ptr(unsafe { ptr.add(i) }, 1) {
             return None;
         }
         let b = unsafe { *ptr.add(i) };
@@ -1026,7 +1029,7 @@ pub(crate) unsafe fn patch_game_menu() {
         return;
     }
     let root = *(G_POPUP_DIALOG as *const *mut BinDlg);
-    if !readable(root as *const u8, core::mem::size_of::<BinDlg>()) {
+    if !readable_ptr(root as *const u8, core::mem::size_of::<BinDlg>()) {
         return;
     }
     let Some(title) = read_cstr((*root).text, 64) else {
@@ -1049,7 +1052,7 @@ unsafe fn patch_chain(root: *mut BinDlg) -> bool {
     let mut our: *mut BinDlg = core::ptr::null_mut();
     let mut save_visible = false;
     while guard < 64 {
-        if !readable(dlg as *const u8, core::mem::size_of::<BinDlg>()) {
+        if !readable_ptr(dlg as *const u8, core::mem::size_of::<BinDlg>()) {
             return false;
         }
         if let Some(bytes) = read_cstr((*dlg).text, 64) {
@@ -1085,7 +1088,7 @@ unsafe fn patch_chain(root: *mut BinDlg) -> bool {
     let mut dlg = root;
     let mut guard = 0;
     while guard < 64 {
-        if !readable(dlg as *const u8, core::mem::size_of::<BinDlg>()) {
+        if !readable_ptr(dlg as *const u8, core::mem::size_of::<BinDlg>()) {
             return false;
         }
         if let Some(bytes) = read_cstr((*dlg).text, 64) {

@@ -28,14 +28,17 @@ pub enum CastMode {
 
 /// Untargeted orders that SC2 treats as cast-all (stim, burrow, cloaking,
 /// transformations, siege/viking-style morphs). Everything else targeted
-/// defaults to smart cast.
+/// defaults to smart cast. These are **Cosmonarchy's** order ids (the mod's
+/// orders.dat remapped the vanilla slots — vanilla 0x4D is "Idle (Power-Up)"
+/// in the mod, not Siege Mode); the mod's orders.txt is the reference, and
+/// the per-unit cast-modes table in plus.yml can pin individual units.
 const DEFAULT_ALL_AT_ONCE: &[u8] = &[
-    0x2E, // Stim Packs
-    0x0C, // Burrow
-    0x12, // Cloak
-    0x13, // Decloak
-    0x4D, // Siege Mode (tank)
-    0x4E, // Tank Mode
+    98,  // Siege Mode (siege tanks, morph-class)
+    99,  // Tank Mode
+    109, // Cloak
+    110, // Decloak
+    116, // Burrow
+    118, // Unburrow
 ];
 
 /// The SC2 default mode for an order: untargeted (cast-all class) orders are
@@ -100,28 +103,31 @@ mod tests {
 
     #[test]
     fn stim_is_all_at_once_by_default() {
-        assert_eq!(default_mode(0x2E), CastMode::All);
-        assert_eq!(default_mode(0x0C), CastMode::All); // burrow
+        // Cosmonarchy order ids (orders.txt): siege/tank/cloak/burrow.
+        assert_eq!(default_mode(98), CastMode::All); // Siege Mode
+        assert_eq!(default_mode(99), CastMode::All); // Tank Mode
+        assert_eq!(default_mode(109), CastMode::All); // Cloak
+        assert_eq!(default_mode(116), CastMode::All); // Burrow
     }
 
     #[test]
     fn targeted_spells_are_smart_by_default() {
-        assert_eq!(default_mode(0x1A), CastMode::Smart); // e.g. storm-like
-        assert_eq!(default_mode(0x2D), CastMode::Smart);
+        assert_eq!(default_mode(142), CastMode::Smart); // Psionic Storm (targeted)
+        assert_eq!(default_mode(144), CastMode::Smart); // Plague
     }
 
     #[test]
     fn shift_forces_all() {
-        assert_eq!(resolve_mode(0x1A, 12, None, true), CastMode::All);
-        assert_eq!(resolve_mode(0x2E, 12, None, true), CastMode::All);
+        assert_eq!(resolve_mode(142, 12, None, true), CastMode::All);
+        assert_eq!(resolve_mode(98, 12, None, true), CastMode::All);
     }
 
     #[test]
     fn explicit_override_wins_over_the_default() {
         let o = Some(CastMode::All);
-        assert_eq!(resolve_mode(0x1A, 12, o.as_ref(), false), CastMode::All);
+        assert_eq!(resolve_mode(142, 12, o.as_ref(), false), CastMode::All);
         let s = Some(CastMode::Smart);
-        assert_eq!(resolve_mode(0x2E, 12, s.as_ref(), false), CastMode::Smart);
+        assert_eq!(resolve_mode(98, 12, s.as_ref(), false), CastMode::Smart);
     }
 
     #[test]

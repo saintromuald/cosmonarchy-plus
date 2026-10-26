@@ -483,39 +483,49 @@ pub(crate) unsafe fn poll() {
     let action = {
         let mut guard = MODEL.lock().unwrap();
         let model = guard
-            .get_or_insert_with(|| SubgroupModel::new(identity, ids.clone()));
-        model.press(identity, ids.clone(), dir)
+            .get_or_insert_with(|| SubgroupModel::new(identity, ids.clone(), ptrs.clone()));
+        model.press(identity, ids.clone(), ptrs.clone(), dir)
     };
 
-    let (active, groups, active_id): (u32, u32, u16) = match action {
+    let (active, groups, active_id, active_key): (u32, u32, u16, u32) = match action {
         SubgroupAction::Inert => {
             if crate::config::env_flag("CM_PLUS_TAB_DEBUG") {
                 crate::log::log("[cosmo-plus] tab cycle debug: single subgroup, Tab inert");
             }
             return;
         }
-        SubgroupAction::Reset { active_id, groups } => {
+        SubgroupAction::Reset {
+            active_id,
+            active_key,
+            groups,
+        } => {
             if crate::config::env_flag("CM_PLUS_TAB_DEBUG") {
                 crate::log::log(&format!(
                     "[cosmo-plus] tab cycle debug: fresh selection (first subgroup {active_id})"
                 ));
             }
-            (0, groups, active_id)
+            (0, groups, active_id, active_key)
         }
         SubgroupAction::Cycle {
             active_id,
+            active_key,
             index,
             groups,
-        } => (index, groups, active_id),
+        } => (index, groups, active_id, active_key),
     };
 
     // The active subgroup's run in the CURRENT (possibly engine-reordered)
-    // array; make it first and aim the engine's card at it.
+    // array, resolved by its unique first-unit token (duplicate unit types
+    // may form several runs); make it first and aim the engine's card at it.
     let runs = subgroup_runs(&ids);
-    let Some(run) = runs.iter().find(|r| r.unit_id == active_id) else {
+    let Some(run) = runs
+        .iter()
+        .find(|r| ptrs.get(r.start).copied() == Some(active_key))
+        .cloned()
+    else {
         return;
     };
-    let rep = if selftest { 0 } else { apply_subgroup(run, &ptrs) };
+    let rep = if selftest { 0 } else { apply_subgroup(&run, &ptrs) };
 
     {
         let mut d = DISPLAY.lock().unwrap();
@@ -611,20 +621,32 @@ pub(crate) unsafe fn apply_display() {
     let action = {
         let mut guard = MODEL.lock().unwrap();
         let model = guard
-            .get_or_insert_with(|| SubgroupModel::new(identity, ids.clone()));
-        model.ensure(identity, ids.clone())
+            .get_or_insert_with(|| SubgroupModel::new(identity, ids.clone(), ptrs.clone()));
+        model.ensure(identity, ids.clone(), ptrs.clone())
     };
-    let active_id = match action {
+    let (active_id, active_key) = match action {
         SubgroupAction::Inert => {
             deactivate();
             return;
         }
-        SubgroupAction::Reset { active_id, .. } => active_id,
-        SubgroupAction::Cycle { active_id, .. } => active_id,
+        SubgroupAction::Reset {
+            active_id,
+            active_key,
+            ..
+        } => (active_id, active_key),
+        SubgroupAction::Cycle {
+            active_id,
+            active_key,
+            ..
+        } => (active_id, active_key),
     };
 
     let runs = subgroup_runs(&ids);
-    let Some(run) = runs.iter().find(|r| r.unit_id == active_id) else {
+    let Some(run) = runs
+        .iter()
+        .find(|r| ptrs.get(r.start).copied() == Some(active_key))
+        .cloned()
+    else {
         deactivate();
         return;
     };

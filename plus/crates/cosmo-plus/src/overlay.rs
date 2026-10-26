@@ -361,14 +361,13 @@ unsafe fn draw_world_annotations() {
     set_font_handle(core::ptr::null_mut());
 }
 
-/// The idle-worker badge (SC2-style), anchored just above the minimap's
-/// terrain toggle (the stock "Hide Terrain (Tab)" button): the first idle
-/// worker's command-card icon, scaled down to HUD size, plus the yellow count.
-/// With no idle worker it shows the local race's tier-1 worker icon and a grey 0.
-///
-/// Drawn by hud.rs through the minimap dispatch — on the **screen buffer**
-/// after the zoom resample — so plain screen coordinates are correct and the
-/// badge is visible at every zoom level.
+/// The idle-worker badge: `Idle: N` in the small font, drawn camera-relative
+/// at the top-left of the view — the coordinate space the Changes panel uses,
+/// the one that has always been visible on this engine. Screen-fixed spots
+/// (minimap anchors, world-surface screen coordinates) vanish inside the zoom
+/// crop or under the HUD, so the badge follows the view instead: always
+/// visible at every zoom, a few pixels lower than the original 35f0ffb
+/// position and text-only (no icon, so the whole badge is smaller).
 pub(crate) unsafe fn draw_idle_counter() {
     if crate::frame::frame_count() == 0 {
         return; // not in a game
@@ -380,61 +379,34 @@ pub(crate) unsafe fn draw_idle_counter() {
     if font.is_null() {
         return;
     }
+    if !crate::repl::badge_shown() {
+        return;
+    }
     let n = crate::idle_workers::count_idle(local);
     static FIRST_DRAW: std::sync::Once = std::sync::Once::new();
     FIRST_DRAW.call_once(|| {
         crate::log::log(&format!("[cosmo-plus] idle counter: first draw n={n}"));
     });
 
-    // Anchored to the minimap panel so it tracks the UI at any resolution:
-    // left edge aligned with the terrain button, bottom edge just above the
-    // panel's button strip. Drawn on the screen buffer (via hud.rs), so the
-    // pin is a plain screen position — no camera term, and no zoom crop to
-    // fall outside of. Validated minimap rect; when the global no longer
-    // holds sane values the badge falls back to a fixed screen spot instead
-    // of disappearing.
-    let rect = crate::state::minimap_rect().unwrap_or([6, 348, 133, 475]);
-    const ICON_W: i32 = 24;
-    const ICON_H: i32 = 22;
-    if !crate::repl::badge_shown() {
-        return;
-    }
-    let (pin_x, pin_y) = crate::repl::badge_pin().unwrap_or((
-        crate::config::env("CM_PLUS_IDLE_BADGE_X")
-            .and_then(|v| v.parse::<i32>().ok())
-            .unwrap_or(rect[0] + 12),
-        crate::config::env("CM_PLUS_IDLE_BADGE_Y")
-            .and_then(|v| v.parse::<i32>().ok())
-            .unwrap_or(rect[1] - 66),
-    ));
-    let screen_x = pin_x;
-    let screen_y = pin_y;
-    let (screen_x, screen_y) = crate::hud::screen_to_surface(screen_x, screen_y);
+    let (cx, cy) = camera();
+    let (ox, oy) = crate::repl::badge_pin().unwrap_or((4, 30));
+    let text_x = cx + ox;
+    let text_y = cy + oy;
 
     set_font_handle(font);
     write_draw_text(0, 0, 0x7FFF, 0x7FFF);
     *(G_PRINT_XY_ALIGNMENT as *mut u8) = 0x11;
 
-    // Text first, icon last: the text path is the one that has always
-    // rendered on this surface, so the label is never lost if the engine's
-    // icon blit misbehaves. Shadow, then "Idle: N" in yellow (grey at 0).
+    // Shadow, then "Idle: N" in yellow (grey at 0).
     let mut buf = [0u8; 16];
     buf.fill(0);
     let label = format!("Idle: {n}");
     let len = label.len().min(buf.len() - 1);
     buf[..len].copy_from_slice(&label.as_bytes()[..len]);
-    let text_x = screen_x + ICON_W + 4;
-    let text_y = screen_y + (ICON_H - 8) / 2;
     get_color_handle(text_color::BLACK);
     bw_print_xy(buf.as_ptr(), text_x + 1, text_y + 1);
     get_color_handle(if n > 0 { text_color::YELLOW } else { text_color::GREY2 });
     bw_print_xy(buf.as_ptr(), text_x, text_y);
-
-    // Icon last: the label above is already drawn, so a failed icon blit
-    // (icons GRP not loaded yet) just leaves the text-only badge.
-    let icon_id = crate::idle_workers::first_idle_icon(local)
-        .unwrap_or_else(|| tier1_worker_icon(local as u8));
-    let _ = crate::icon::draw_unit_icon_scaled(icon_id, screen_x, screen_y, ICON_W, ICON_H);
     set_font_handle(core::ptr::null_mut());
 }
 
@@ -488,10 +460,10 @@ pub(crate) unsafe fn draw_tab_indicator() {
         format!("Tab {active}/{total} \u{b7} {short}")
     };
     let _ = write!(&mut buf[..], "{label}");
-    // Screen-fixed via the zoom mapping: at magnified zoom this lands in the
-    // crop region that actually reaches the screen.
-    let (x, y) = crate::hud::screen_to_surface(60, 250);
-    bw_print_xy(buf.as_ptr(), x, y);
+    // Camera-relative like the Changes panel: always inside the view, at
+    // every zoom level.
+    let (cx, cy) = camera();
+    bw_print_xy(buf.as_ptr(), cx + 60, cy + 250);
     set_font_handle(core::ptr::null_mut());
 }
 

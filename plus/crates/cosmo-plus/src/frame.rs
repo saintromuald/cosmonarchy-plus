@@ -34,9 +34,25 @@ pub(crate) fn install() {
     }
 }
 
+/// The game pointer the current per-frame state belongs to; when it changes a
+/// new match started and every per-game feature state must reset (idle cursor,
+/// subgroup cycle, queued presses) — otherwise the second match inherits the
+/// first one's leftovers.
+static LAST_GAME_PTR: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
 /// The per-frame callback.
 unsafe extern "C" fn tick() {
     unsafe {
+        {
+            let api = crate::plus::api();
+            let game = (api.game)().map(|f| f() as usize).unwrap_or(0);
+            if game != 0 && game != LAST_GAME_PTR.load(std::sync::atomic::Ordering::SeqCst) {
+                LAST_GAME_PTR.store(game, std::sync::atomic::Ordering::SeqCst);
+                crate::idle_workers::reset();
+                crate::tab_cycle::reset();
+                crate::log::log(&format!("[cosmo-plus] new game (0x{game:08X}): per-game state reset"));
+            }
+        }
         // Cosmonarchy's hotloader rebuilds the mpq (and the dat tables) on each
         // game launch, so the table pointers can move between sessions. Refresh
         // bw_dat and re-apply the (idempotent) dat overrides whenever they do —

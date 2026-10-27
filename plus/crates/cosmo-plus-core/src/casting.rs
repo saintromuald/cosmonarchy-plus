@@ -54,7 +54,7 @@ pub fn default_mode(order_id: u8) -> CastMode {
 /// Resolve the effective mode for a cast: an explicit `plus.yml` override for
 /// the unit type wins; otherwise the SC2 default for the order. Holding Shift
 /// (the override modifier) forces `All`.
-pub fn resolve_mode(order_id: u8, unit_id: u16, override_all: Option<&CastMode>, shift_held: bool) -> CastMode {
+pub fn resolve_mode(order_id: u8, _unit_id: u16, override_all: Option<&CastMode>, shift_held: bool) -> CastMode {
     if shift_held {
         return CastMode::All;
     }

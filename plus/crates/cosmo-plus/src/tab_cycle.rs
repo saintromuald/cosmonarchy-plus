@@ -316,6 +316,9 @@ unsafe extern "system" fn keyboard_proc(code: i32, wparam: usize, lparam: isize)
     }
     // Never interfere outside a running game.
     if crate::frame::frame_count() == 0 {
+        // Menu: any key press triggers the one-shot abilities dump when the
+        // flag is armed (the buttonset table is live by now).
+        crate::abilities::dump_on_menu_key();
         return call_next(code, wparam, lparam);
     }
     // Never while chat or a modal dialog is open.
@@ -478,46 +481,50 @@ pub(crate) unsafe fn poll() {
         return;
     };
 
-    // Feed the press through the pure SC2 subgroup model.
+    // Feed the press through the pure SC2 subgroup model. Only the
+    // cycle-worthy runs (units with abilities, plus the always-cycle list)
+    // take part: Tab visits exactly those, SC2-style.
     let identity = selection_identity(&ptrs);
+    let runs = subgroup_runs(&ids);
+    let keys: Vec<u32> = runs
+        .iter()
+        .filter(|r| crate::abilities::cycle_worthy(r.unit_id))
+        .filter_map(|r| ptrs.get(r.start).copied())
+        .filter(|&k| k != 0)
+        .collect();
     let action = {
         let mut guard = MODEL.lock().unwrap();
-        let model = guard
-            .get_or_insert_with(|| SubgroupModel::new(identity, ids.clone(), ptrs.clone()));
-        model.press(identity, ids.clone(), ptrs.clone(), dir)
+        let model = guard.get_or_insert_with(|| SubgroupModel::new(identity, keys.clone()));
+        model.press(identity, keys.clone(), dir)
     };
 
-    let (active, groups, active_id, active_key): (u32, u32, u16, u32) = match action {
+    let (active, groups, active_key): (u32, u32, u32) = match action {
         SubgroupAction::Inert => {
             if crate::config::env_flag("CM_PLUS_TAB_DEBUG") {
-                crate::log::log("[cosmo-plus] tab cycle debug: single subgroup, Tab inert");
+                crate::log::log(
+                    "[cosmo-plus] tab cycle debug: no worthy subgroups (abilities only), Tab inert",
+                );
             }
             return;
         }
-        SubgroupAction::Reset {
-            active_id,
-            active_key,
-            groups,
-        } => {
+        SubgroupAction::Reset { active_key, groups } => {
             if crate::config::env_flag("CM_PLUS_TAB_DEBUG") {
                 crate::log::log(&format!(
-                    "[cosmo-plus] tab cycle debug: fresh selection (first subgroup {active_id})"
+                    "[cosmo-plus] tab cycle debug: fresh selection (first subgroup key 0x{active_key:08X})"
                 ));
             }
-            (0, groups, active_id, active_key)
+            (0, groups, active_key)
         }
         SubgroupAction::Cycle {
-            active_id,
             active_key,
             index,
             groups,
-        } => (index, groups, active_id, active_key),
+        } => (index, groups, active_key),
     };
 
     // The active subgroup's run in the CURRENT (possibly engine-reordered)
     // array, resolved by its unique first-unit token (duplicate unit types
     // may form several runs); make it first and aim the engine's card at it.
-    let runs = subgroup_runs(&ids);
     let Some(run) = runs
         .iter()
         .find(|r| ptrs.get(r.start).copied() == Some(active_key))
@@ -525,6 +532,7 @@ pub(crate) unsafe fn poll() {
     else {
         return;
     };
+    let active_id = run.unit_id;
     let rep = if selftest { 0 } else { apply_subgroup(&run, &ptrs) };
 
     {
@@ -618,30 +626,27 @@ pub(crate) unsafe fn apply_display() {
         return;
     };
     let identity = selection_identity(&ptrs);
+    let runs = subgroup_runs(&ids);
+    let keys: Vec<u32> = runs
+        .iter()
+        .filter(|r| crate::abilities::cycle_worthy(r.unit_id))
+        .filter_map(|r| ptrs.get(r.start).copied())
+        .filter(|&k| k != 0)
+        .collect();
     let action = {
         let mut guard = MODEL.lock().unwrap();
-        let model = guard
-            .get_or_insert_with(|| SubgroupModel::new(identity, ids.clone(), ptrs.clone()));
-        model.ensure(identity, ids.clone(), ptrs.clone())
+        let model = guard.get_or_insert_with(|| SubgroupModel::new(identity, keys.clone()));
+        model.ensure(identity, keys.clone())
     };
-    let (active_id, active_key) = match action {
+    let active_key = match action {
         SubgroupAction::Inert => {
             deactivate();
             return;
         }
-        SubgroupAction::Reset {
-            active_id,
-            active_key,
-            ..
-        } => (active_id, active_key),
-        SubgroupAction::Cycle {
-            active_id,
-            active_key,
-            ..
-        } => (active_id, active_key),
+        SubgroupAction::Reset { active_key, .. } => active_key,
+        SubgroupAction::Cycle { active_key, .. } => active_key,
     };
 
-    let runs = subgroup_runs(&ids);
     let Some(run) = runs
         .iter()
         .find(|r| ptrs.get(r.start).copied() == Some(active_key))
@@ -650,6 +655,7 @@ pub(crate) unsafe fn apply_display() {
         deactivate();
         return;
     };
+    let active_id = run.unit_id;
     let rep = representative(&run, &ptrs);
 
     // Re-assert only when the engine clobbered our state: the run moved

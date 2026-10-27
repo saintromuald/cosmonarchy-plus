@@ -86,6 +86,8 @@ static WORTHY: Lazy<Mutex<Vec<Option<bool>>>> = Lazy::new(|| Mutex::new(Vec::new
 
 /// Whether a unit's card carries at least one ability button (or the unit is
 /// on the always-cycle list). Tab cycles only through worthy subgroups.
+/// Results are cached per unit id; an unresolved buttonset table returns
+/// false WITHOUT caching (it resolves during game init).
 pub(crate) unsafe fn cycle_worthy(unit_id: u16) -> bool {
     if ALWAYS_CYCLE.contains(&unit_id) {
         return true;
@@ -97,7 +99,9 @@ pub(crate) unsafe fn cycle_worthy(unit_id: u16) -> bool {
             return v;
         }
     }
-    let worthy = unsafe { classify(unit_id) };
+    let Some(worthy) = unsafe { classify(unit_id) } else {
+        return false; // table not resolved yet; retry next time
+    };
     let mut cache = WORTHY.lock().unwrap();
     if cache.len() <= id {
         cache.resize(id + 1, None);
@@ -106,22 +110,21 @@ pub(crate) unsafe fn cycle_worthy(unit_id: u16) -> bool {
     worthy
 }
 
-/// Read the unit's buttonset and look for a non-generic order button. The
-/// table resolves during game init; before that everything classifies false
-/// (Tab stays inert until the data is live).
-unsafe fn classify(unit_id: u16) -> bool {
+/// Read the unit's buttonset and look for a non-generic order button.
+/// `None` = the buttonset table is not resolved yet.
+unsafe fn classify(unit_id: u16) -> Option<bool> {
     let table = std::ptr::read(G_BUTTONSET_TABLE as *const *const ButtonSet);
     if table.is_null() || !crate::overlay::readable_ptr(table as *const u8, 4) {
-        return false;
+        return None;
     }
     let bs = table.add(unit_id as usize);
     if !crate::overlay::readable_ptr(bs as *const u8, core::mem::size_of::<ButtonSet>()) {
-        return false;
+        return None;
     }
     let count = (*bs).buttons_in_set.min(MAX_BUTTONS);
     let first = (*bs).first_button;
     if count == 0 || first.is_null() {
-        return false;
+        return Some(false);
     }
     for i in 0..count as usize {
         let b = first.add(i);
@@ -133,10 +136,10 @@ unsafe fn classify(unit_id: u16) -> bool {
             continue; // build/train/cancel buttons carry unit ids
         }
         if !GENERIC_ORDERS.contains(&order) {
-            return true;
+            return Some(true);
         }
     }
-    false
+    Some(false)
 }
 
 /// Call from the draw pass: dump once when `CM_PLUS_DUMP_ABILITIES=1`. The

@@ -99,7 +99,8 @@ pub(crate) unsafe fn cycle_worthy(unit_id: u16) -> bool {
             return v;
         }
     }
-    let Some(worthy) = unsafe { classify(unit_id) } else {
+    let classified = unsafe { classify(unit_id) };
+    let Some(worthy) = classified else {
         return false; // table not resolved yet; retry next time
     };
     let mut cache = WORTHY.lock().unwrap();

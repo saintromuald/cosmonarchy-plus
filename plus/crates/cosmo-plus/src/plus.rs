@@ -101,7 +101,7 @@ pub(crate) fn install() {
     // Camera hotkey labels (C1-C8 on the minimap): needs the gptp export.
     crate::cam_labels::install();
     crate::state::feature("camera-labels", crate::cam_labels::status());
-    // Larva picker (CapsLock by default; see larva_pick.rs). Needs the draw hook and
+    // Larva picker (Ctrl+Space by default; see larva_pick.rs). Needs the draw hook and
     // installs its own keyboard hook for the count entry.
     crate::larva_pick::install();
     crate::state::feature("larva-pick", crate::larva_pick::status());
@@ -111,6 +111,10 @@ pub(crate) fn install() {
     // SC2-style Tab subgroup cycling (see tab_cycle.rs). Polled from the draw hook.
     crate::tab_cycle::install();
     crate::state::feature("tab-cycle", crate::tab_cycle::status());
+    // Global production queue with config-driven 2x icons (see queue.rs).
+    crate::queue::install();
+    crate::state::feature("queue-scale", crate::queue::status());
+    warn_on_key_collisions();
     // Screen-fixed HUD overlays (idle badge, Tab indicator, camera labels,
     // nydus minimap numbers) on the minimap dialog's draw path.
     if !crate::config::env_flag("CM_PLUS_NO_DRAW_HOOK") {
@@ -129,4 +133,44 @@ pub(crate) fn install() {
     // REPL `state` command).
     unsafe { crate::state::write_report("boot") };
     unsafe { crate::selftest::run() };
+}
+
+/// Loud warnings when two keyboard hooks resolve to the same key. The hooks
+/// chain newest-first and swallow, so a collision means the newer feature
+/// silently kills the older one. Chords with CTRL/ALT are modifier-disjoint
+/// from bare keys (every hook passes Ctrl/Alt-modified presses through), but
+/// SHIFT chords over the tab key DO collide (the tab hook swallows Shift+Tab
+/// as the backward cycle), and cam_pan swallows Ctrl+WASD/arrows.
+fn warn_on_key_collisions() {
+    let idle = crate::idle_workers::key_vk();
+    let (larva, larva_mods) = (crate::larva_pick::key_vk(), crate::larva_pick::key_mods());
+    let (fwd, prev) = (crate::tab_cycle::fwd_vk(), crate::tab_cycle::prev_vk());
+    let mut issues: Vec<String> = Vec::new();
+    if idle != 0 && (larva == idle && larva_mods == 0) {
+        issues.push(format!("idle (VK 0x{idle:02X}) vs larva pick (same bare key)"));
+    }
+    if idle != 0 && (fwd == idle || prev == idle) {
+        issues.push(format!("idle (VK 0x{idle:02X}) vs tab cycle (same key)"));
+    }
+    if larva != 0 && (fwd == larva || prev == larva) && (larva_mods & 0b101) == 0 {
+        // Bare larva key, or a SHIFT-only chord over the tab key: the tab hook
+        // swallows Tab and Shift+Tab — the chord can never reach larva.
+        issues.push(format!(
+            "larva pick (VK 0x{larva:02X}, mods {larva_mods}) vs tab cycle (same key)"
+        ));
+    }
+    // cam_pan swallows Ctrl+WASD/arrows; a larva chord over those keys with
+    // CTRL required would be eaten by cam_pan's hook (installed earlier,
+    // runs later in the chain = first).
+    const CAM_PAN_VKS: &[u16] = &[0x57, 0x41, 0x53, 0x44, 0x26, 0x28, 0x25, 0x27]; // W A S D up down left right
+    if larva_mods & 0b100 != 0 && larva != 0 && CAM_PAN_VKS.contains(&larva) {
+        issues.push(format!("larva pick (VK 0x{larva:02X} + CTRL) vs cam pan (Ctrl+WASD/arrows)"));
+    }
+    if issues.is_empty() {
+        crate::state::feature("key-collisions", "none");
+    } else {
+        let msg = issues.join("; ");
+        crate::log::log(&format!("[cosmo-plus] WARNING key collisions: {msg}"));
+        crate::state::feature("key-collisions", &format!("{msg} (newest hook wins)"));
+    }
 }

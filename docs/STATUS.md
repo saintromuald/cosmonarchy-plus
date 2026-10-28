@@ -3,6 +3,77 @@
 Evidence-backed state of each request. Update this file, not the plan's prose, when a
 phase lands.
 
+## 0. SC2-parity session (2026-10-27) — Tab/idle/queue/larva/anti-meta rework
+
+Five asks, designed under two external critique agents (two rounds each) and
+implemented:
+
+- **Tab cycle (caster/ability caveat, SC2 parity).** Core model rewritten:
+  run keys = (derived id, ordinal) computed from the CANONICAL selection
+  (`ccmu_extender.new_active_selection` via the exe pointer at 0x006284B8) —
+  stable across rotations/canonical re-copies/head-of-run deaths; membership
+  changes keep the active subgroup (SC2 semantics); a detour at the engine's
+  selection entry (0x0046FA00, prologue-replaying, chain-jump) resets the
+  cycle on every fresh selection (recall included). Burrowed/unburrowed are
+  separate subgroups (derived-id fold, orders {0x74,0x75}). Adapter:
+  modifier guards (Ctrl/Alt+Tab pass through), auto-repeat swallow, saturating
+  press queue, `apply_display` before `poll`, worthy-only indicator, morphing
+  runs show the type's card (buttonset id from the unit id), `CARD_READY`
+  gating (fully inert without the fork's card patch), portrait restore on
+  deactivate, bounded client-table rotation (never exceeds the live count,
+  lead filtered to client membership). **Ability orders on a mixed selection
+  are narrowed to one subgroup** (`tab_cycle::narrow_targets`, peer-symmetric:
+  canonical state only — never the rotated client table or the viewer-local
+  model; the command hook installs whenever smart-cast OR the tab cycle is
+  armed). 79 core tests.
+- **Idle workers.** SC2-style screen-fixed counter (worker icon +
+  "Idle Workers: N", icon size-compensated per zoom) above the minimap.
+  Predicate: BUSY_ORDERS {0x19,0x1A,0x1E,0x1F,0x20,0x21,0x22,0x23,0x25,0x2A,0x2B}
+  exclude constructing/repairing/morphing workers (the Mason build-window
+  bug), queued construction orders count as busy (guarded order-queue walk),
+  immobile placeholder tier-2 workers excluded (live `top_speed <= 1`).
+  One merged count+icon pass per frame.
+- **Production queue 2x.** `CM_PLUS_QUEUE_ICON_SCALE=2` (config-file only):
+  hides the mod's 28px production slot widgets every frame (g_statres_dialog
+  0x0068C234 child walk, ltrb-bounds pitch/row predicate, visible bit 0x8)
+  and draws the local player's 2x queue (two rows, cmdicons, counts,
+  draw_box progress bars with the mod's guards) camera-relative top-left.
+  `g_production` resolved by signature (`B8 E4 00 E4 00 BF <imm>`) — verified
+  in BOTH shipped builds (Prerelease RVA 0x126B61 / Original RVA 0xA2D51) —
+  live imm accepted only inside the module's committed span, base-delta
+  fallback. Replays untouched; `CM_PLUS_QUEUE_TEST` forces synthetic rows for
+  the screenshot harness (never writes the live arrays).
+- **Larva Ctrl+Space.** `parse_binding` chords (`CTRL+SPACE`,
+  `CTRL+SHIFT+<key>`, `ALT+<key>`; required-held semantics); default
+  `CTRL+SPACE`; auto-repeat never toggles; chat/modal guard; Ctrl+digits pass
+  through while entering; `cosmo_plus.conf.example` documents it. Verified
+  LIVE in-game: the chord opened the entry window.
+- **Anti-meta as a real mode.** Roll re-applies idempotently on sim frames
+  1..=4 (seed cached per game; resources + announce on frame 1 only — the
+  hook runs post-StepObjects, later overwrites would eat mining income);
+  resources apply to EVERY active player (team symmetry fixed); replays
+  skipped. Mod-source patch (GameType::AntiMeta=46, GameKind::AntiMeta,
+  get_game_kind, no-op mode-init case, cm_utils label/filename cases) applied
+  to the local reference checkout and saved as
+  `docs/patches/gptp-antimeta-mode.notes` (with the GameKind audit and the
+  peer-gate warning: the template must stay OUT of the mod's mpq).
+  `docs/antimeta-mode-notes.md` rewritten to match the new timing model.
+
+**Verified:** 79 core tests; cross build; `verify-plus.sh` green (boot report
++ selftest 14/14, key-collisions none, larva armed as CTRL+SPACE, selection
+detour installed, command hook narrowing armed); live on the widescreen
+Prerelease build: idle counter drew (n=6), Ctrl+Space opened the entry
+window.
+
+**Blocked / pending live verification (harness degraded today, pre-existing —
+reproduces with the pre-change build):** tab cycling with a real mixed
+selection, subgroup-scoped ability execution, queue 2x render, anti-meta in a
+live lobby, and the two-peer `desyncs=0` test. The canonical-selection
+resolution is unverified on the widescreen build (it logs the pointer value
+on failure — see `cosmo_plus.log`); if the extender does not rewrite
+0x006284B8 there, the cycle stays inert loudly and the fallback plan is the
+extender's own anchor immediates.
+
 ## 1. Saturation overlay — DONE and verified in-game
 
 - Model: `docs/measurements/saturation.md`, 25 host tests in `cosmo-plus-core`.

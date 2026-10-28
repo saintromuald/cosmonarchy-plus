@@ -84,11 +84,54 @@ impl UnitView for View<'_> {
     fn order(&self) -> u8 {
         self.0.order
     }
+    fn has_queued_build(&self) -> bool {
+        // SC2 parity: a worker parked with shift-queued construction orders is
+        // not idle (it has work assigned). Walk the raw order queue, guarded:
+        // empty lists compare begin == end, and every entry is pointer-checked.
+        let begin = self.0.order_queue_begin;
+        let end = self.0.order_queue_end;
+        if begin.is_null() || begin == end {
+            return false;
+        }
+        unsafe {
+            let mut cur = begin;
+            let mut guard = 0u32;
+            while !cur.is_null() && guard < 8 {
+                if !crate::overlay::readable_ptr(cur as *const u8, 8) {
+                    return false; // corrupt queue: treat as not busy, never crash
+                }
+                let order = (*cur).order_id;
+                if cosmo_plus_core::idle::BUSY_ORDERS.contains(&order) {
+                    return true;
+                }
+                cur = (*cur).next;
+                guard += 1;
+            }
+        }
+        false
+    }
+    fn is_immobile(&self) -> bool {
+        // The six placeholder tier-2 workers (Talos 20, Gosvileth 47, Prudence
+        // 184, Agrileth 302, Dyad 444, Constituent 566) ship with top_speed = 1
+        // and can never move: a trained one would read as "1 idle" forever.
+        // Read the LIVE value (the data pass and ultraload modify speeds at
+        // runtime, so the dat table is not authoritative).
+        self.0.flingy.top_speed <= 1
+    }
 }
 
 /// The local player's idle-worker count (the HUD counter value).
 pub(crate) unsafe fn count_idle(local: u32) -> u32 {
+    let (n, _) = idle_count_and_icon(local);
+    n
+}
+
+/// One pass over the unit list returning (idle count, command-card icon of the
+/// first idle worker). The overlay needs both every frame; two walks would be
+/// wasteful at draw rate.
+pub(crate) unsafe fn idle_count_and_icon(local: u32) -> (u32, Option<u32>) {
     let mut n = 0u32;
+    let mut icon: Option<u32> = None;
     crate::frame::for_each_unit(|u| {
         if (*u).player as u32 != local {
             return;
@@ -97,27 +140,17 @@ pub(crate) unsafe fn count_idle(local: u32) -> u32 {
             return;
         }
         n += 1;
+        if icon.is_none() {
+            icon = Some(bw_dat::UnitId((*u).unit_id).icon());
+        }
     });
-    n
+    (n, icon)
 }
 
 /// The command-card icon id of the first idle worker, or None when none are
 /// idle. Used for the SC2-style HUD badge.
 pub(crate) unsafe fn first_idle_icon(local: u32) -> Option<u32> {
-    let mut icon: Option<u32> = None;
-    crate::frame::for_each_unit(|u| {
-        if icon.is_some() {
-            return;
-        }
-        if (*u).player as u32 != local {
-            return;
-        }
-        if !is_idle_worker(&View(&*u)) {
-            return;
-        }
-        icon = Some(bw_dat::UnitId((*u).unit_id).icon());
-    });
-    icon
+    idle_count_and_icon(local).1
 }
 
 /// The resolved hotkey VK (0 = disabled), set once at install.
@@ -137,6 +170,11 @@ pub(crate) fn status() -> String {
     } else {
         format!("armed (VK 0x{vk:02X})")
     }
+}
+
+/// The resolved VK (0 = disabled), for the boot-time key-collision check.
+pub(crate) fn key_vk() -> u16 {
+    KEY_VK.load(Ordering::SeqCst)
 }
 
 /// Resolve and log the hotkey, and install the keyboard hook (one-time, at load).

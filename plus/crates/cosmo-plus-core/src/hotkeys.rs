@@ -4,16 +4,44 @@
 /// mod's hotkey layer (F1–F8 are camera screens, F10 the menu, F11 the HUD toggle).
 pub const DEFAULT_IDLE_WORKER_KEY: &str = "F9";
 
-/// Default larva-pick hotkey: CapsLock (VK 0x14) — free in the game and the
-/// mod, and next to the digits for quick counts (CapsLock, 3, 3, Enter = 33
-/// larva). The key-down is swallowed, so the OS caps toggle never flips.
-pub const DEFAULT_LARVA_KEY: &str = "CAPSLOCK";
+/// Default larva-pick hotkey: Ctrl+Space (VK 0x20 with the CTRL modifier) —
+/// free in the game and the mod (the game binds nothing to Space alone, and no
+/// mod hotkey uses Ctrl+Space; camera pan uses Ctrl+WASD). Flow: hold
+/// Ctrl+Space, release Ctrl, type a count (2, 4, Enter = 24 larva). The
+/// key-down is swallowed so nothing else fires. Players who prefer the old
+/// single-key picker can set `CM_PLUS_LARVA_KEY=CAPSLOCK` (or any parseable
+/// key/chord) in `cosmo_plus.conf`.
+pub const DEFAULT_LARVA_KEY: &str = "CTRL+SPACE";
 
-/// Default subgroup-cycle hotkey: Tab (VK 0x09). Unbound everywhere in stock Brood
-/// War and in the mod's hotkey layer (the engine's key handler ignores it — see
-/// `tab_cycle.rs`), so it is dedicated to SC2-style subgroup cycling. Shift+Tab
-/// cycles backward; `CM_PLUS_TAB_PREV_KEY` may assign a separate backward key.
-pub const DEFAULT_TAB_KEY: &str = "TAB";
+/// Modifier bits for a hotkey chord. Extra held modifiers are ignored: a
+/// binding with these modifiers fires when AT LEAST these modifiers are held.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct Modifiers {
+    pub ctrl: bool,
+    pub shift: bool,
+    pub alt: bool,
+}
+
+impl Modifiers {
+    pub const fn none() -> Self {
+        Self { ctrl: false, shift: false, alt: false }
+    }
+    pub const fn any(&self) -> bool {
+        self.ctrl || self.shift || self.alt
+    }
+    /// The virtual-key bits to test with GetAsyncKeyState.
+    pub const fn mask(&self) -> u32 {
+        (self.ctrl as u32) << 2 | (self.shift as u32) << 1 | (self.alt as u32)
+    }
+}
+
+/// A parsed hotkey binding: the virtual key plus required modifiers (all
+/// false for a bare key).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Binding {
+    pub vk: u16,
+    pub mods: Modifiers,
+}
 
 /// Parse a hotkey name into a virtual-key code.
 ///
@@ -80,6 +108,44 @@ pub fn parse_key(name: &str) -> Option<u16> {
     })
 }
 
+/// Default subgroup-cycle hotkey: Tab (VK 0x09). Unbound everywhere in stock Brood
+/// War and in the mod's hotkey layer (the engine's key handler ignores it — see
+/// `tab_cycle.rs`), so it is dedicated to SC2-style subgroup cycling. Shift+Tab
+/// cycles backward; `CM_PLUS_TAB_PREV_KEY` may assign a separate backward key.
+pub const DEFAULT_TAB_KEY: &str = "TAB";
+
+/// Parse a hotkey name into a binding (key + required modifiers).
+///
+/// Accepts everything [`parse_key`] does, optionally prefixed with
+/// `CTRL+`, `SHIFT+`, `ALT+` (any combination, any order, case-insensitive),
+/// e.g. `CTRL+SPACE`, `SHIFT+CTRL+COMMA`, `ALT+0x50`. A modifier prefix on an
+/// unparseable key yields `None`. Bare keys keep their legacy behaviour
+/// (no modifiers required).
+pub fn parse_binding(name: &str) -> Option<Binding> {
+    let n = name.trim();
+    if n.is_empty() {
+        return None;
+    }
+    let upper = n.to_ascii_uppercase();
+    let mut mods = Modifiers::none();
+    let parts: Vec<&str> = upper.split('+').map(str::trim).collect();
+    if parts.is_empty() || parts.iter().any(|p| p.is_empty()) {
+        return None; // stray separators, e.g. "CTRL++SPACE"
+    }
+    // All but the last part must be modifier names.
+    for part in &parts[..parts.len() - 1] {
+        match *part {
+            "CTRL" | "CONTROL" => mods.ctrl = true,
+            "SHIFT" => mods.shift = true,
+            "ALT" => mods.alt = true,
+            _ => return None, // unknown prefix
+        }
+    }
+    // The last part is the key itself.
+    let vk = parse_key(*parts.last().unwrap())?;
+    Some(Binding { vk, mods })
+}
+
 /// US-layout OEM virtual-key codes for the printable punctuation keys.
 fn oem_key(c: u8) -> Option<u16> {
     Some(match c {
@@ -134,5 +200,25 @@ mod tests {
         assert_eq!(parse_key("F13"), None);
         assert_eq!(parse_key("CTRL"), None);
         assert_eq!(parse_key("nonsense"), None);
+    }
+
+    #[test]
+    fn parses_chords() {
+        let b = |s: &str| parse_binding(s);
+        assert_eq!(b("CTRL+SPACE"), Some(Binding { vk: 0x20, mods: Modifiers { ctrl: true, shift: false, alt: false } }));
+        assert_eq!(b("ctrl+space"), Some(Binding { vk: 0x20, mods: Modifiers { ctrl: true, shift: false, alt: false } }));
+        assert_eq!(b("SHIFT+CTRL+COMMA"), Some(Binding { vk: 0xBC, mods: Modifiers { ctrl: true, shift: true, alt: false } }));
+        assert_eq!(b("ALT+0x50"), Some(Binding { vk: 0x50, mods: Modifiers { ctrl: false, shift: false, alt: true } }));
+        assert_eq!(b("CONTROL+SHIFT+ALT+F12"), Some(Binding { vk: 0x7B, mods: Modifiers { ctrl: true, shift: true, alt: true } }));
+        // Bare keys parse as bindings with no modifiers (legacy behaviour).
+        assert_eq!(b("CAPSLOCK"), Some(Binding { vk: 0x14, mods: Modifiers::none() }));
+        assert_eq!(b("F9"), Some(Binding { vk: 0x78, mods: Modifiers::none() }));
+        // Errors.
+        assert_eq!(b(""), None);
+        assert_eq!(b("CTRL+"), None);
+        assert_eq!(b("CTRL++SPACE"), None);
+        assert_eq!(b("CTRL"), None);
+        assert_eq!(b("CTRL+NONSENSE"), None);
+        assert_eq!(b("WIN+SPACE"), None);
     }
 }

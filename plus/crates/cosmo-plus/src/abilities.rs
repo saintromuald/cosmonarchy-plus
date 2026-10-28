@@ -62,6 +62,11 @@ const MAX_BUTTONS: u32 = 32;
 const GENERIC_ORDERS: &[u16] = &[
     0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, // die/stop/guard/ignore/attack
     14, 15, 17, 18, 19, 20, 21, 22, 23, 24, // attack move, scripts, nothing
+    25, 26, 30, 31, 32, 33, // DroneStartBuild 0x19, DroneBuild 0x1A,
+    //   BuildTerran 0x1E, BuildProtoss1/2 0x1F/0x20, ConstructingBuilding 0x21
+    //   (worker construction orders — they appear in the COMMAND byte for
+    //   build/morph commands and must never be narrowed; the structure id
+    //   rides in the command's payload, which narrowing would drop)
     34, 35, 36, 37, 38, 39, 40, // repair, addons, train, rally
     49, // follow
     50, 51, 52, 53, 54, 55, 56, 57, 58, 59, 60, 61, 62, 63, 64, 65, 68, 69,
@@ -80,6 +85,46 @@ const GENERIC_ORDERS: &[u16] = &[
 /// The Lakizilisk (the lurker) has no manual burrow button — its card is
 /// attack-only — but it is an essential unit to Tab to.
 const ALWAYS_CYCLE: &[u16] = &[103, 425]; // ZergLakizilisk, ZergLakiziliskZorthos
+
+/// Whether a command order byte is an ability-class order (a spell/morph/
+/// research/… — NOT a generic movement/harvest order and NOT a build/train
+/// command, which carries unit ids in the order slot). The tab cycle's
+/// subgroup-scoped execution narrows only these; everything else broadcasts.
+pub(crate) fn is_ability_order(order: u8) -> bool {
+    let o = order as u16;
+    o != 0 && o < 499 && !GENERIC_ORDERS.contains(&o)
+}
+
+/// Whether the unit type's card carries the given order (its buttonset has a
+/// button with `action_var == order`). Used by the narrowing rule to target
+/// the subgroup that can actually execute the order — deterministic, because
+/// the buttonset table is identical on every peer. `false` while the table is
+/// unresolved.
+pub(crate) unsafe fn has_order(unit_id: u16, order: u8) -> bool {
+    let table = std::ptr::read(G_BUTTONSET_TABLE as *const *const ButtonSet);
+    if table.is_null() || !crate::overlay::readable_ptr(table as *const u8, 4) {
+        return false;
+    }
+    let bs = table.add(unit_id as usize);
+    if !crate::overlay::readable_ptr(bs as *const u8, core::mem::size_of::<ButtonSet>()) {
+        return false;
+    }
+    let count = (*bs).buttons_in_set.min(MAX_BUTTONS);
+    let first = (*bs).first_button;
+    if count == 0 || first.is_null() {
+        return false;
+    }
+    for i in 0..count as usize {
+        let b = first.add(i);
+        if !crate::overlay::readable_ptr(b as *const u8, core::mem::size_of::<Button>()) {
+            break;
+        }
+        if (*b).action_var == order as u16 {
+            return true;
+        }
+    }
+    false
+}
 
 /// Lazily-filled per-unit classification (None = not classified yet).
 static WORTHY: Lazy<Mutex<Vec<Option<bool>>>> = Lazy::new(|| Mutex::new(Vec::new()));

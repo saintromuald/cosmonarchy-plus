@@ -70,7 +70,11 @@ pub(crate) fn install() {
 }
 
 /// Map a screen position to world-surface coordinates for the current zoom
-/// (identity at 100%).
+/// (identity at 100%). The zoom statics are re-read every frame (see
+/// `refresh_zoom_view`); the addresses are loader-stable, the VALUES change
+/// whenever the player zooms — the old once-cached crop went stale on the
+/// first wheel-scroll and pushed screen-fixed overlays out of the visible
+/// area.
 pub(crate) unsafe fn screen_to_surface(sx: i32, sy: i32) -> (i32, i32) {
     let units = UNITS.load(Ordering::Relaxed).max(10000) as i32;
     let wx = CROP_LEFT.load(Ordering::Relaxed) as i32 + sx * units / 10000;
@@ -78,17 +82,20 @@ pub(crate) unsafe fn screen_to_surface(sx: i32, sy: i32) -> (i32, i32) {
     (wx, wy)
 }
 
-/// Validate the resolved zoom layout against the draw-hook surface at first
-/// draw: units in [10000, 30000] and a crop that is a sane sub-rect of the
-/// surface. When the layout does not validate, the mapping stays identity
-/// (100%) and the boot report says so.
-unsafe fn validate_once(surface_w: i32, surface_h: i32) {
-    if RESOLVED.load(Ordering::SeqCst) {
-        return;
-    }
+/// The current zoom percentage (100 = 100%), for size compensation: an overlay
+/// that must keep a constant SCREEN size draws at `size * 10000 / zoom_units`
+/// surface pixels, because the crop magnifies surface pixels onto the screen.
+pub(crate) fn zoom_units() -> u32 {
+    UNITS.load(Ordering::Relaxed).max(10000)
+}
+
+/// Re-read the live zoom statics (units + crop) once per frame, at the top of
+/// the draw pass. The values change on every wheel-scroll; a torn read during
+/// a transition is clamped by the sanity range and self-heals next frame.
+unsafe fn refresh_zoom_view(surface_w: i32, surface_h: i32) {
     let units_addr = ZOOM_UNITS_ADDR.load(Ordering::SeqCst);
     if units_addr == 0 {
-        return;
+        return; // gptp.qdp not loaded; identity mapping
     }
     let units = std::ptr::read(units_addr as *const u32);
     let crop = ZOOM_CROP_ADDR.load(Ordering::SeqCst) as *const u16;
@@ -105,19 +112,26 @@ unsafe fn validate_once(surface_w: i32, surface_h: i32) {
         && h <= surface_h
         && l + w <= surface_w
         && t + h <= surface_h;
-    crate::log::log(&format!(
-        "[cosmo-plus] hud overlay: zoom layout units={units} crop=({l},{t},{w},{h}) \
-         surface=({surface_w},{surface_h}) -> {}",
-        if ok { "VALID" } else { "INVALID (identity mapping)" }
-    ));
+    if !RESOLVED.load(Ordering::SeqCst) {
+        RESOLVED.store(true, Ordering::SeqCst);
+        crate::log::log(&format!(
+            "[cosmo-plus] hud overlay: zoom layout units={units} crop=({l},{t},{w},{h}) \
+             surface=({surface_w},{surface_h}) -> {}",
+            if ok { "VALID" } else { "INVALID (identity mapping)" }
+        ));
+    }
     if ok {
         UNITS.store(units, Ordering::Relaxed);
         CROP_LEFT.store(l as u32, Ordering::Relaxed);
         CROP_TOP.store(t as u32, Ordering::Relaxed);
         CROP_W.store(w as u32, Ordering::Relaxed);
         CROP_H.store(h as u32, Ordering::Relaxed);
+    } else {
+        // Identity fallback: whole surface, 100%.
+        UNITS.store(10000, Ordering::Relaxed);
+        CROP_LEFT.store(0, Ordering::Relaxed);
+        CROP_TOP.store(0, Ordering::Relaxed);
     }
-    RESOLVED.store(true, Ordering::SeqCst);
 }
 
 /// Minimal head of the vanilla `graphics::Bitmap` (width/height, u16 each).
@@ -134,23 +148,25 @@ pub(crate) unsafe fn draw_overlays(surface: *mut core::ffi::c_void, _bounds: *mu
         return; // not in a game
     }
     let surf = surface as *const BitmapHead;
+    let (mut w, mut h) = (640, 480);
     if !surf.is_null() {
-        let w = (*surf).width as i32;
-        let h = (*surf).height as i32;
+        let (sw, sh) = ((*surf).width as i32, (*surf).height as i32);
         // The dims only validate the zoom layout; nonsense values just skip
         // the strict check (the mapping itself never needs them).
-        if (0..=4096).contains(&w) && (0..=4096).contains(&h) {
-            validate_once(w, h);
-        } else {
-            validate_once(640, 480);
+        if (0..=4096).contains(&sw) && (0..=4096).contains(&sh) {
+            w = sw;
+            h = sh;
         }
     }
+    // Re-read the live zoom statics once per frame (the player may have zoomed
+    // since last frame; the crop mapping must follow).
+    refresh_zoom_view(w, h);
     let mut buf = [0u8; 16];
     // Minimap-position labels first (they sit on the map panel).
     crate::nydus::draw_minimap(&mut buf);
     crate::cam_labels::draw_minimap(&mut buf);
-    // HUD badges: the idle-worker counter above the minimap and the Tab
-    // subgroup indicator.
+    // HUD badges: the SC2-style idle-worker counter and the Tab subgroup
+    // indicator, both screen-fixed through the crop mapping.
     crate::overlay::draw_idle_counter();
     crate::overlay::draw_tab_indicator();
     // Diagnostic probe (CM_PLUS_HUD_PROBE=1): markers at the candidate

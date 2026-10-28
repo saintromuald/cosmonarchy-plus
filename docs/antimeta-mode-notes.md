@@ -43,48 +43,84 @@ Two ways to mark the mode:
 
 Implemented: (1) as the primary, selectable path with (2) as override/test path.
 
-### Known cosmetic gaps (upstream gptp, not fixable from the Plus plugin)
+### GUI integration (v3)
 
-- The pre-game chat room's "Game Mode" label (`update_game_info_labels`, gptp glu_chat.cpp)
-  is `magic_enum::enum_name(GameType::Enum(x))`; gptp's enum has no 46, so the label is
-  blank there (the Create Game dropdown itself shows "Anti Meta" from the template name).
-  The same applies to the CrownLink join screen label and Discord rich presence, which
-  falls back to "Custom".
-- `bw::get_game_kind()` returns `GameKind::Invalid` for 46. That is deliberate: every
-  gptp game-start branch and mode helper checks for a *specific* kind, so Invalid behaves
-  like plain melee (no Omnipresence/Duopoly/Massacre init, cheats allowed). The one
-  assert-hazard, `game_kind_to_filename_string` (asserts on unknown kinds), is only called
-  from the campaign chain (`create_next_campaign_game_4DC1F7`), which an Anti Meta match
-  never runs.
+The mode follows the mod's own mode architecture (the Pron0go pattern used by
+Uprising / The Turning / Embraced):
+
+- **Dropdown entry.** The engine builds the Create Game dropdown from
+  `templates.lst`; `Anti Meta(1).got` (game type 46) is staged by
+  `cosmo-variant` on every Plus launch, so the dropdown shows **Anti Meta**
+  directly under Unranked. No engine change needed (loader 0x4AB750, list
+  insert 0x4AB150, `compile_list` 0x4AAD00 filters subtype 1).
+- **Mod enum/labels.** `docs/patches/gptp-antimeta-mode.notes` is the patch
+  against `reference/cosmonarchy-gptp` that adds `GameType::AntiMeta = 46`,
+  `GameKind::AntiMeta`, the `get_game_kind()` case, the no-op mode-init
+  switch case (Plus performs the roll), and the `game_kind_to_string` /
+  `game_kind_to_filename_string` cases (the latter ASSERTS on unknown kinds
+  — the one real hazard the patch removes). With it, a rebuilt gptp.qdp
+  renders "AntiMeta" in the chat-room/join labels via magic_enum and
+  "Anti Meta" in Discord presence. The patch is applied to the local
+  reference checkout on a branch and kept as a file for upstream
+  submission.
+- **What stays Plus-side until a rebuild ships.** The shipped gptp.qdp
+  binary cannot be patched to add the enum name: the chat-room "Game Mode"
+  label stays blank for type 46 and Discord presence stays "Custom" until an
+  upstream/CI rebuild lands. The Create Game dropdown (the actual menu the
+  mode is selected from) is unaffected — it already shows "Anti Meta".
+  `game_kind_to_string`/presence gaps are documented here, not hidden.
+- **Peer gating.** The template must NOT ship inside the mod's mpq: the
+  map-authorisation check (0x4AAEA0) boots clients whose template list lacks
+  the entry, and that is exactly the version lock that keeps vanilla clients
+  out of Anti Meta lobbies (they would join, not roll, and desync). The
+  template ships exclusively through Plus's launcher staging.
 
 ## Determinism
 
 - Seed the roll from the **game's own synced RNG state** (`g_rng_seed` = 0x0051CA14, part of
   the snapped state), never the wall clock. The seed value is identical on both peers at game
-  start. The roll itself is a deterministic SplitMix64 expansion of that seed (the pure
-  `roll(seed)` in `cosmo-plus-core`), so both peers compute the same tuple.
-- Plus runs before the first frame, therefore before the rollback plugin's first snapshot
-  and before any player command. That makes the modified start part of the initial state on
-  both peers.
-- Do not randomise per player: draw one tuple and apply it to every player slot that is in
-  the game (same roll for both teams), as requested.
+  start and across rollback re-simulations. The roll itself is a deterministic SplitMix64
+  expansion of that seed (the pure `roll(seed)` in `cosmo-plus-core`), so both peers compute
+  the same tuple.
+- The seed is read once, at the first window frame of each game, and cached per game; every
+  re-application in the window uses the cached value (identical on every peer and every
+  resimulation, because the first application happens at the same frame).
+- Plus's frame hook runs after `StepObjects` — that is fine for the seed (the value at that
+  point is synced sim state) and for the roll (all writes are deterministic functions of
+  seed + game state). Whether the hook executes during rollback re-simulation (samase_shim's
+  per-frame callback is part of the sim path, unlike the draw pass — but this has NOT been
+  observed in a live rollback yet) is a load-bearing assumption: the window re-application
+  below makes convergence explicit, and the two-peer harness run in the release checklist
+  verifies it.
 
 ## Application point
 
-- Native equivalent of the mod's `on_game_start` (`0x004C9A51`): after `create_init_units`
-  and before the `GameKind` switch. The Rust plugin currently only has the frame hook; the
-  first `run_game_tick` is late but still before input is processed — acceptable for v1,
-  and testable. A dedicated init hook is cleaner if the address resolves.
+- Per-frame sim hook (`samase_shim`'s `hook_step_objects`, after `StepObjects`). The roll is
+  **re-applied idempotently on every sim tick in the window frames 1..=4** of each game:
+  * the worker adjustment (remove-excess + spawn-missing) runs every window frame — removal
+    and spawn are deterministic functions of (seed, current unit state), so re-running them
+    is a no-op once converged, and a rollback re-simulation that restores a snapshot from
+    before the first application re-applies the identical roll and converges;
+  * the resource overwrite and the on-screen announce fire on **frame 1 only** — the hook
+    runs after StepObjects, so overwriting resources on later frames would discard that
+    frame's mining income (deterministic on both peers, but wrong economy);
+  * frames 2..4 re-normalising the worker count is the mode's contract ("every player has
+    exactly target workers at start"), so a trigger that changes the count in that window
+    is overridden — accepted and documented.
 - Adjust units: count each player's completed workers; spawn/remove to reach the target.
   Keep the town hall and any pre-placed buildings. Spawn location: near the town hall,
-  using the game's `create_unit` path (same as `aise`).
+  using the game's `create_unit` path (same as `aise`), a fixed ring of offsets retried on
+  collision — deterministic.
 - Resources: `g_game_minerals` (`0x0057F0F0`), `g_game_vespene` (`0x0057F120`), plus the
-  matching `g_total_*` counters used for score.
+  matching `g_total_*` counters used for score. **Every active Human/Computer player gets
+  the rolled resources** — symmetric across teams even when a slot has no racial worker or
+  no completed town hall (worker adjustment is skipped for those slots, the resources are
+  not).
 - Announce with a centre-screen message (`bw::println`) so players see the roll.
 
 ## Implemented
 
-The engine side is in `plus/crates/cosmo-plus/src/antimeta.rs`, wired into the first-tick
+The engine side is in `plus/crates/cosmo-plus/src/antimeta.rs`, wired into the per-frame
 block in `frame.rs`. It is a data/rules feature only — no netcode.
 
 - **Activation.** The lobby game type wins: `*g_game_type == 46` (the `Anti Meta(1).got`

@@ -16,12 +16,12 @@
 #
 # CM_PLUS_IDLE_WORKER_KEY=,
 
-# Position of the idle-worker badge, in screen pixels. Omit both to anchor it
-# to the minimap panel (just above the terrain/"Hide Terrain" toggle) at any
-# resolution.
+# Position of the idle-worker counter ("Idle Workers: N" + worker icon, fixed
+# on screen like SC2's lower-left indicator), in screen pixels. Omit both to
+# draw it just above the minimap panel (SC2's lower-left corner region).
 #
-# CM_PLUS_IDLE_BADGE_X=18
-# CM_PLUS_IDLE_BADGE_Y=280
+# CM_PLUS_IDLE_BADGE_X=4
+# CM_PLUS_IDLE_BADGE_Y=314
 
 # Overlay label font: `small` (default, FONT_SMALL) or `std` (standard in-game font).
 #
@@ -30,3 +30,34 @@
 # Disable the Tab subgroup cycle.
 #
 # CM_PLUS_NO_TAB_CYCLE=1
+
+# The Tab subgroup cycle visits ONLY spellcasters and units/buildings with
+# special abilities (the cycle skips pure production buildings and
+# attack-only units). Forward key (default TAB; Shift+forward goes backward)
+# and an optional separate backward key. Tab replaces the stock "hide
+# terrain" binding while in a game. Ctrl/Alt + Tab still reach the game.
+#
+# CM_PLUS_TAB_KEY=TAB
+# CM_PLUS_TAB_PREV_KEY=
+
+# Larva picker: select hatcheries, press the chord, type a count (1-99,
+# clamped to 12), Enter or the 2 s timeout -> exactly that many larva are
+# selected. No digits = select all. Default: CTRL+SPACE (hold Ctrl, press
+# Space, release Ctrl, type the count — Ctrl+0-9 control groups still work
+# while the entry is open). Accepts any bare key (CAPSLOCK, F12, …) or a
+# chord (CTRL+SPACE, SHIFT+CTRL+COMMA, ALT+<key>, …); extra held modifiers
+# are ignored. Note: Alt chords suppress Alt+Space (the Windows system menu)
+# in-game.
+#
+# CM_PLUS_LARVA_KEY=CTRL+SPACE
+
+# Global production queue icon size — strictly a config-file choice, there is
+# no in-game checkbox:
+#   unset / 0  the mod's own small queue (top bar), untouched;
+#   2          the plugin hides the mod's small production icons and draws
+#              its own 2x queue for YOUR units/upgrades at the top-left of
+#              the view (allied rows are not drawn — see docs). In replays
+#              the mod's queue is left alone. Icons are the command-card
+#              icons; the count text follows CM_PLUS_OVERLAY_FONT.
+#
+# CM_PLUS_QUEUE_ICON_SCALE=2

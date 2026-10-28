@@ -25,6 +25,7 @@ mod mpqdraft;
 mod nydus;
 mod overlay;
 mod plugin;
+mod queue;
 mod reload;
 mod repl;
 mod plus;

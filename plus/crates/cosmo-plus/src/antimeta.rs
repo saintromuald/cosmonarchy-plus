@@ -17,7 +17,7 @@
 //!
 //! No netcode here: this is a data/rules feature only.
 
-use std::sync::atomic::{AtomicU32, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicUsize, Ordering};
 
 use bw_dat::structs::Unit;
 
@@ -244,11 +244,28 @@ pub(crate) const GAME_TYPE_ANTI_META: u8 = 46;
 /// Guarantees the mode is applied once per **game** (not once per process: a player can
 /// return to the menu and start another match without relaunching).
 static LAST_GAME: AtomicUsize = AtomicUsize::new(0);
-static APPLIED_GAME: AtomicUsize = AtomicUsize::new(0);
 static LAST_FRAME: AtomicU32 = AtomicU32::new(0);
+/// Per-game cached state. ALL of it is keyed on the GAME POINTER and is never
+/// cleared by a frame regress: a rollback re-simulation that re-enters frames
+/// 1..=4 must re-apply the SAME roll (same seed, same announce policy), so
+/// the caches survive regress and only reset when a different game starts.
+static ENABLED_RESOLVED: AtomicBool = AtomicBool::new(false);
+static MODE_ON: AtomicBool = AtomicBool::new(false);
+static SEED_CACHE: AtomicU32 = AtomicU32::new(0);
+static FIRST_APPLICATION: AtomicBool = AtomicBool::new(false);
 
-/// Per-frame entry point. Applies the roll on the first frames of each new game and does
-/// nothing afterwards. Replays are never modified (that would corrupt playback), and a
+/// The window (sim frames, inclusive) during which the roll re-applies
+/// idempotently. Frames 2..4 repeat ONLY the worker adjustment (removal/spawn
+/// are deterministic no-ops once converged); resources and the announce fire
+/// on the FIRST application only, because the hook runs after StepObjects and
+/// re-writing the resource globals on later frames would discard that frame's
+/// mining income. Re-application keeps rollback re-simulations convergent
+/// even when the rollback plugin's initial snapshot predates the plugin's
+/// hook.
+const APPLY_WINDOW_END: u32 = 4;
+
+/// Per-frame entry point. Applies the roll on the first frames of each new game and
+/// does nothing afterwards. Replays are never modified (that would corrupt playback), and a
 /// plugin that somehow finds itself mid-game does not touch the running economy.
 pub(crate) unsafe fn on_game_tick() {
     let api = crate::plus::api();
@@ -260,65 +277,88 @@ pub(crate) unsafe fn on_game_tick() {
         return;
     }
     let frame = (*(game as *const bw_dat::structs::Game)).frame_count;
-    let last_frame = LAST_FRAME.swap(frame, Ordering::SeqCst);
-    if LAST_GAME.swap(game, Ordering::SeqCst) != game || frame < last_frame {
-        APPLIED_GAME.store(0, Ordering::SeqCst);
+    LAST_FRAME.swap(frame, Ordering::SeqCst);
+    if LAST_GAME.swap(game, Ordering::SeqCst) != game {
+        // A NEW game: re-arm the per-game caches. Frame regress within the
+        // SAME game (rollback re-simulation) keeps them — the roll is
+        // deterministic given the cached seed and the game state, so every
+        // resimulation converges identically.
+        ENABLED_RESOLVED.store(false, Ordering::SeqCst);
+        MODE_ON.store(false, Ordering::SeqCst);
+        SEED_CACHE.store(0, Ordering::SeqCst);
+        FIRST_APPLICATION.store(false, Ordering::SeqCst);
     }
-    if APPLIED_GAME.load(Ordering::SeqCst) == game {
-        return;
-    }
-    if frame > 4 {
-        // Loaded mid-game (or a state we did not start): never rewrite a live economy.
-        APPLIED_GAME.store(game, Ordering::SeqCst);
+    if frame == 0 || frame > APPLY_WINDOW_END {
+        // Loaded mid-game (or past the window): never rewrite a live economy.
         return;
     }
     if is_replay() {
-        crate::log::log("[cosmo-plus] anti-meta: replay detected -> skipped");
-        APPLIED_GAME.store(game, Ordering::SeqCst);
+        if frame == 1 {
+            crate::log::log("[cosmo-plus] anti-meta: replay detected -> skipped");
+        }
         return;
     }
-    if !enabled() {
-        APPLIED_GAME.store(game, Ordering::SeqCst);
+    if !ENABLED_RESOLVED.swap(true, Ordering::SeqCst) {
+        MODE_ON.store(enabled(), Ordering::SeqCst);
+    }
+    if !MODE_ON.load(Ordering::SeqCst) {
         return;
     }
-    apply_roll();
-    APPLIED_GAME.store(game, Ordering::SeqCst);
+    let first = !FIRST_APPLICATION.swap(true, Ordering::SeqCst);
+    apply_roll(first);
 }
 
 /// `g_game_data.is_replay` (0x005967F8 + 0x32).
-fn is_replay() -> bool {
+pub(crate) fn is_replay() -> bool {
     const G_GAME_DATA: usize = 0x005967F8;
     const IS_REPLAY_OFFSET: usize = 0x32;
     unsafe { *( (G_GAME_DATA + IS_REPLAY_OFFSET) as *const u8 ) != 0 }
 }
 
-/// Apply the anti-meta roll once, if the mode is enabled.
-unsafe fn apply_roll() {
-    let api = crate::plus::api();
-    let seed = match (api.rng_seed)() {
-        Some(f) => f(),
-        None => {
-            crate::log::log("[cosmo-plus] anti-meta: ERROR rng_seed accessor missing; using seed 0");
-            0
-        }
+/// Apply the anti-meta roll. `first` = the first window application: resources
+/// and the announce fire only then (later frames would overwrite mining
+/// income); the worker adjustment re-applies idempotently on every window
+/// frame so rollback re-simulations converge. The seed is cached per game:
+/// read fresh only on the first application, reused for every re-application
+/// — including a resimulation that re-enters frame 1 (the cache survives
+/// frame regress; it only resets on a new game).
+unsafe fn apply_roll(first: bool) {
+    let seed = if SEED_CACHE.load(Ordering::SeqCst) == 0 {
+        let api = crate::plus::api();
+        let s = match (api.rng_seed)() {
+            Some(f) => f(),
+            None => {
+                crate::log::log("[cosmo-plus] anti-meta: ERROR rng_seed accessor missing; using seed 0");
+                0
+            }
+        };
+        SEED_CACHE.store(s, Ordering::SeqCst);
+        s
+    } else {
+        SEED_CACHE.load(Ordering::SeqCst)
     };
     let mut roll = antimeta::roll(seed);
     // Test-only override (like `CM_PLUS_SATURATION_OPT_CAP`): force the worker target so the
     // spawn path can be exercised without a lucky seed. Clamped to the legal 4..=8 range.
+    // Deterministic per config, so re-applications compute the same target.
     if let Some(v) = crate::config::env("CM_PLUS_ANTIMETA_FORCE_WORKERS") {
         if let Ok(n) = v.trim().parse::<u8>() {
             let forced = n.clamp(4, 8);
-            crate::log::log(&format!(
-                "[cosmo-plus] anti-meta: TEST forcing workers {} -> {forced}",
-                roll.workers
-            ));
+            if first {
+                crate::log::log(&format!(
+                    "[cosmo-plus] anti-meta: TEST forcing workers {} -> {forced}",
+                    roll.workers
+                ));
+            }
             roll.workers = forced;
         }
     }
-    crate::log::log(&format!(
-        "[cosmo-plus] anti-meta: seed={seed:#010x} roll workers={} minerals={} gas={}",
-        roll.workers, roll.minerals, roll.gas
-    ));
+    if first {
+        crate::log::log(&format!(
+            "[cosmo-plus] anti-meta: seed={seed:#010x} roll workers={} minerals={} gas={}",
+            roll.workers, roll.minerals, roll.gas
+        ));
+    }
 
     let mut any = false;
     for player in 0..PLAYER_LIMIT {
@@ -326,7 +366,15 @@ unsafe fn apply_roll() {
         if !player_active(player) {
             continue;
         }
-        // Race determines the worker id; a race with no worker (or no town hall) is skipped.
+        // Resources are a pure overwrite of the rolled values and apply to
+        // EVERY active player — symmetric across teams even when a slot has
+        // no racial worker or no completed town hall (teammates must not end
+        // up with different economies).
+        if first {
+            set_resources(player as usize, roll.minerals, roll.gas);
+        }
+        // Race determines the worker id; a race with no worker (or no town
+        // hall) skips the worker adjustment but keeps the resource roll above.
         let race = player_race(player);
         let Some(worker_id) = antimeta::racial_worker_id(race) else {
             continue;
@@ -343,19 +391,19 @@ unsafe fn apply_roll() {
         let removed = remove_excess(&mut workers, to_remove, tx, ty);
         let added = spawn_workers(player, worker_id, to_add, tx, ty);
 
-        set_resources(player as usize, roll.minerals, roll.gas);
-
-        crate::log::log(&format!(
-            "[cosmo-plus] anti-meta: player {player} race {race} town_hall=({tx},{ty}) workers {before} -> {} (removed {removed}, added {added}) minerals={} gas={}",
-            roll.workers, roll.minerals, roll.gas
-        ));
+        if first {
+            crate::log::log(&format!(
+                "[cosmo-plus] anti-meta: player {player} race {race} town_hall=({tx},{ty}) workers {before} -> {} (removed {removed}, added {added}) minerals={} gas={}",
+                roll.workers, roll.minerals, roll.gas
+            ));
+        }
         any = true;
     }
 
-    if any {
+    if first && any {
         announce(&roll);
-    } else {
-        crate::log::log("[cosmo-plus] anti-meta: no active player with a town hall; nothing applied");
+    } else if first {
+        crate::log::log("[cosmo-plus] anti-meta: no active player; nothing applied");
     }
 }
 

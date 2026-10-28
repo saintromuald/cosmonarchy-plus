@@ -7,43 +7,60 @@
 //!   * **Tab** cycles the *active subgroup* forward, **Shift+Tab** backward;
 //!   * only the active subgroup's buttons are shown, so its spells/abilities win the
 //!     hotkeys, while plain orders (move/attack/stop) still go to every selected unit;
-//!   * selecting fresh resets to the first subgroup.
+//!   * a fresh selection resets to the first subgroup; a subgroup stays active while
+//!     it has any members;
+//!   * burrowed/unburrowed units are separate subgroups (SC2 4.9.1).
 //!
-//! Brood War has no subgroup concept, so this drives the engine's own card
-//! pipeline the way the fork's buttonset code reads it:
+//! Cosmonarchy Plus adds the user's caveat: Tab visits ONLY the subgroups whose
+//! card carries at least one ability (spell/morph/research/…) — spellcasters and
+//! special-ability units/buildings. Pure production buildings and attack-only
+//! units are not Tab stops. This matches SC2's own principle that units with
+//! abilities rank higher in subgroup priority (SC2 3.9.0 "War Bots now have
+//! lower subgroup priority than units that have abilities").
 //!
+//! Engine mechanics:
+//!   * the pure SC2 state machine lives in `cosmo_plus_core::subgroups::SubgroupModel`,
+//!     fed with run keys computed from the **canonical selection**
+//!     (`ccmu_extender.new_active_selection`, reached through the exe's pointer
+//!     global at 0x006284B8 — synced through select commands, NEVER rotated by us).
+//!     Keying on (derived id, ordinal) keeps the model stable across array
+//!     rotations, canonical re-copies and head-of-run deaths — the two earlier
+//!     schemes failed here (id keys bounced between duplicate-type runs; pointer
+//!     tokens died with the run's first unit);
 //!   * `get_selected_unit()` (buttonsets.cpp) = the **first completed unit in
-//!     `g_client_selection_group`** — the client selection table. So the active
+//!     `g_client_selection_group`** — the client selection table. The active
 //!     subgroup is made first by **rotating that table** (viewer-local: the table
-//!     is not part of the synced game state).
-//!   * Mixed selections otherwise get the generic `Buttons_GroupMixed` card
-//!     (update_buttonset_ex). The override writes `g_current_buttonset_id` =
-//!     the active subgroup unit's `current_buttonset`, so every frame the fork's
-//!     `update_current_buttonset` (0x004599A0) binds the subgroup's full card.
-//!   * The portrait/wireframe (`g_active_portrait_unit`) follows the same unit,
-//!     and spell dispatch reads the same pointer, so hotkeys route to the
-//!     active subgroup exactly like SC2.
+//!     is not part of the synced game state) and the fork's per-frame
+//!     `update_current_buttonset` (0x004599A0, jump-patched) then binds the
+//!     subgroup's full card from `g_current_buttonset_id` (our override);
+//!   * the portrait/wireframe (`g_active_portrait_unit`) follows the same unit.
 //!
-//! The engine re-copies its canonical selection order (`active_player_selection`)
-//! and re-derives GroupMixed on its own events, so `apply_display` re-asserts the
-//! rotation + override every frame while the cycle is active (guarded by the
-//! selection identity, so a fresh selection resets to the first subgroup).
+//! The engine re-copies its canonical selection order and re-derives GroupMixed on
+//! its own events, so `apply_display` re-asserts the rotation + override every
+//! frame while the cycle is active. A **detour at the engine's selection entry
+//! point** (`select_units_if_alt_not_held`, 0x0046FA00 — validated unpatched at
+//! install) latches a selection-event flag, which resets the cycle to the first
+//! subgroup exactly like SC2 (box/click/recall and the plugin's own idle/larva
+//! picks all count as fresh selections).
 //!
 //! The Tab key is **swallowed** by a thread keyboard hook (installed after gptp's,
 //! so it runs first) while in a game — stock Brood War binds Tab to hiding the
 //! terrain, which this replaces. Outside chat and modal dialogs the key is never
-//! swallowed. Tab stays inert when the selection has a single unit type.
+//! swallowed; Ctrl/Alt+Tab passes through to the game. Tab stays inert when the
+//! selection has fewer than two worthy subgroups, and when the fork's card
+//! override is not available (unpatched build) the whole cycle disarms loudly.
 //!
 //! Cosmonarchy extends the selection to `SelectionLimit` = 240 units and moves the
-//! client selection table out of the exe into `ccmu_extender` (inside `gptp.qdp`).
-//! Its runtime address is recovered from the immediates the extender patches into
-//! `update_selected_unit_data` (0x004C38BE / 0x004C38F4), validated against the
-//! end-of-table immediate, with the 1.16.1 12-slot table as a fallback.
+//! selection tables out of the exe into `ccmu_extender` (inside `gptp.qdp`).
+//! The client table's runtime address is recovered from the immediates the
+//! extender patches into `update_selected_unit_data` (0x004C38BE / 0x004C38F4);
+//! the canonical table's address is the exe pointer at 0x006284B8 rewritten by
+//! the extender.
 //!
 //! Keys: `CM_PLUS_TAB_KEY` (default `TAB`), `CM_PLUS_TAB_PREV_KEY` (default empty =
 //! Shift+Tab), kill switch `CM_PLUS_NO_TAB_CYCLE=1`.
 
-use std::sync::atomic::{AtomicBool, AtomicU16, AtomicU32, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI32, AtomicU16, AtomicU32, AtomicUsize, Ordering};
 use std::sync::Mutex;
 
 use once_cell::sync::Lazy;
@@ -51,11 +68,15 @@ use once_cell::sync::Lazy;
 use bw_dat::structs::Unit;
 
 use windows_sys::Win32::System::Threading::GetCurrentThreadId;
-use windows_sys::Win32::UI::Input::KeyboardAndMouse::GetAsyncKeyState;
+use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
+    GetAsyncKeyState, VK_CONTROL, VK_MENU, VK_SHIFT,
+};
 use windows_sys::Win32::UI::WindowsAndMessaging::{SetWindowsHookExW, WH_KEYBOARD};
 
 use cosmo_plus_core::hotkeys::{parse_key, DEFAULT_TAB_KEY};
-use cosmo_plus_core::subgroups::{subgroup_runs, SubgroupAction, SubgroupModel, SubgroupRun};
+use cosmo_plus_core::subgroups::{
+    base_id, derived_id, run_keys, subgroup_runs, SubgroupAction, SubgroupModel,
+};
 
 /// `g_client_selection_count` (u8) — maintained by `update_selected_unit_data`.
 const CLIENT_SELECTION_COUNT: usize = 0x0059723D;
@@ -80,12 +101,18 @@ const ADDR_UPDATE_CURRENT_BUTTONSET: usize = 0x004599A0;
 /// when the cycle deactivates so the engine's own card (single or GroupMixed)
 /// comes back.
 const ADDR_UPDATE_BUTTONSET: usize = 0x00458DE0;
+/// `select_units_if_alt_not_held` (0x0046FA00, `BW/bwhelper.cpp`) — the engine's
+/// selection entry point (click/box/recall and the plugin's own selections).
+/// Detoured to latch the selection-event flag; verified unpatched (55 8B EC) at
+/// install, otherwise the identity-hash fallback stands and the boot report says so.
+const ADDR_SELECT_UNITS: usize = 0x0046FA00;
+
 static UPDATE_CURRENT_BUTTONSET_ADDR: u32 = ADDR_UPDATE_CURRENT_BUTTONSET as u32;
 static UPDATE_BUTTONSET_ADDR: u32 = ADDR_UPDATE_BUTTONSET as u32;
+static SELECT_ORIGINAL_ADDR: AtomicU32 = AtomicU32::new(0);
 /// Whether the fork's jump patch is present at `update_current_buttonset`
-/// (checked at install): only then is calling the address register-safe. On an
-/// unpatched build the card override is skipped (the cycle still rotates the
-/// table and aims the portrait).
+/// (checked at install): only then is calling the address register-safe. Without
+/// it the whole cycle is inert (no rotation, no override) — see `install`.
 static CARD_READY: AtomicBool = AtomicBool::new(false);
 
 /// Immediates the selection extender rewrites with the runtime address of
@@ -98,51 +125,69 @@ const ANCHOR_SEL_END: usize = 0x004C38F4;
 const ANCHOR_SEL_BASE2: usize = 0x00423556;
 const ANCHOR_SEL_END2: usize = 0x004235CD;
 
-/// The 1.16.1 selection table, used only when the extender anchors do not validate.
+/// Immediates the extender rewrites with the runtime address of the CANONICAL
+/// selection array `ccmu_extender.new_active_selection` and its one-past-end
+/// slot, inside `is_selected_unit_group_enabled` (0x0049A2C0):
+/// `mov edx, imm32` (imm @ 0x0049A2C8) / `cmp edx, imm32` (imm @ 0x0049A305).
+/// Verified against the shipped exe (vanilla immediates 0x006284B8 /
+/// 0x006284E8 = the stock 12-slot canonical array — 0x006284B8 is the ARRAY
+/// itself, not a pointer to it, which is why the cycle must never read it as
+/// a pointer). A valid pair is exactly `EXTENDED_LIMIT * 4` bytes apart.
+const ANCHOR_CANON_BASE: usize = 0x0049A2C8;
+const ANCHOR_CANON_END: usize = 0x0049A305;
+/// The vanilla 12-slot canonical array (fallback when the extender anchors do
+/// not validate — the extender may leave it untouched on some builds).
+const VANILLA_CANON: usize = 0x006284B8;
+
+/// The 1.16.1 client selection table, used only when the extender anchors do not validate.
 const VANILLA_SELECTION: usize = 0x00597208;
 /// Cosmonarchy's extended selection limit (`SelectionLimit`).
 const EXTENDED_LIMIT: usize = 240;
 /// Stock 1.16.1 selection limit.
 const VANILLA_LIMIT: usize = 12;
 
-const VK_SHIFT: i32 = 0x10;
-
 /// How many frames the subgroup indicator stays visible after a Tab press (~1.5 s).
 const INDICATOR_FRAMES: u32 = 36;
 
-/// Resolved selection table base and its capacity (set once, at first use).
+/// Resolved selection table bases and capacities (set once, at first use).
 static SEL_BASE: AtomicUsize = AtomicUsize::new(0);
 static SEL_LIMIT: AtomicUsize = AtomicUsize::new(0);
 static RESOLVED: AtomicBool = AtomicBool::new(false);
 
+/// Resolved canonical table base (set lazily, re-validated on failure).
+static CANON_BASE: AtomicUsize = AtomicUsize::new(0);
+static CANON_LIMIT: AtomicUsize = AtomicUsize::new(0);
+
 /// Forward cycle key (default Tab) and optional separate backward key (0 = none).
 static FWD_VK: AtomicU16 = AtomicU16::new(0);
-
-/// Resolved status for the boot report.
-pub(crate) fn status() -> String {
-    let vk = FWD_VK.load(Ordering::SeqCst);
-    if vk == 0 {
-        "disabled (no valid key)".to_string()
-    } else {
-        format!("armed (VK 0x{vk:02X})")
-    }
-}
 static PREV_VK: AtomicU16 = AtomicU16::new(0);
+
+/// Whether the selection-event detour is armed (boot report).
+static SELECT_DETOUR_ARMED: AtomicBool = AtomicBool::new(false);
+/// Latched by the selection-entry detour; consumed by the draw pass.
+static SELECTION_EVENT: AtomicBool = AtomicBool::new(false);
 
 /// The keyboard hook handle, kept for the process lifetime.
 static HOOK: Mutex<Option<isize>> = Mutex::new(None);
-/// Key events swallowed by the hook, queued for the draw pass: 1 = forward,
-/// 2 = backward, 0 = none.
-static QUEUED: AtomicU32 = AtomicU32::new(0);
+/// Key presses swallowed by the hook, queued for the draw pass: positive =
+/// forward presses, negative = backward presses (saturating, so rapid presses
+/// never collapse to one).
+static QUEUED: AtomicI32 = AtomicI32::new(0);
 
 /// Game frame until which the indicator stays visible.
 static SHOW_UNTIL_FRAME: AtomicU32 = AtomicU32::new(0);
 
-/// Display state for the overlay/portrait aim: the active subgroup and the
-/// unit it points at. The cycle arithmetic itself lives in the pure
-/// `cosmo_plus_core::subgroups::SubgroupModel` (host-tested).
+/// One canonical run's cached shape: key, derived id, and the pointer set of its
+/// members (in canonical order). Pointer sets survive array rotations and
+/// canonical re-copies; membership is checked by pointer identity.
+struct CanonRun {
+    key: u32,
+    derived_id: u16,
+    ptrs: Vec<u32>,
+}
+
+/// Display state for the overlay/portrait aim.
 struct Display {
-    /// Active subgroup index (0-based).
     active: u32,
     groups: u32,
     active_id: u16,
@@ -160,6 +205,36 @@ static DISPLAY: Lazy<Mutex<Display>> = Lazy::new(|| {
 
 /// The SC2 subgroup state machine (pure; see cosmo-plus-core).
 static MODEL: Lazy<Mutex<Option<SubgroupModel>>> = Lazy::new(|| Mutex::new(None));
+
+/// Resolved status for the boot report.
+pub(crate) fn status() -> String {
+    let vk = FWD_VK.load(Ordering::SeqCst);
+    let mut parts: Vec<String> = Vec::new();
+    if vk == 0 {
+        parts.push("disabled (no valid key)".to_string());
+    } else {
+        parts.push(format!("armed (VK 0x{vk:02X})"));
+    }
+    if !CARD_READY.load(Ordering::SeqCst) {
+        parts.push("card override missing (inert)".to_string());
+    }
+    if !SELECT_DETOUR_ARMED.load(Ordering::SeqCst) {
+        parts.push("selection detour missing (hash fallback)".to_string());
+    }
+    if CANON_BASE.load(Ordering::SeqCst) == 0 {
+        parts.push("canonical selection unresolved (cycle inert until it resolves)".to_string());
+    }
+    parts.join(", ")
+}
+
+/// The resolved forward/backward VKs (0 = none), for the boot-time
+/// key-collision check.
+pub(crate) fn fwd_vk() -> u16 {
+    FWD_VK.load(Ordering::SeqCst)
+}
+pub(crate) fn prev_vk() -> u16 {
+    PREV_VK.load(Ordering::SeqCst)
+}
 
 /// Order-insensitive selection identity: FNV-1a over the sorted raw unit
 /// pointers, so the rotated array still matches the selection it belongs to.
@@ -218,12 +293,14 @@ pub(crate) fn install() {
         }
     }
     install_hook();
+    install_selection_detour();
     rearm_announce();
     // Resolve the selection table now: `gptp.qdp` (the mod) loads before this plugin
     // and has already rewritten the anchor immediates, so the extended table resolves
     // during the menu boot and is logged for the headless probe.
     unsafe {
         resolve_selection();
+        resolve_canonical();
         // The card override needs the fork's jump-patched update_current_buttonset:
         // calling the vanilla function with our register state would be unsafe.
         let first = std::ptr::read(ADDR_UPDATE_CURRENT_BUTTONSET as *const u8);
@@ -232,7 +309,14 @@ pub(crate) fn install() {
             "[cosmo-plus] tab cycle: card override {} (update_current_buttonset first byte 0x{first:02X})",
             if CARD_READY.load(Ordering::SeqCst) { "armed" } else { "disabled" }
         ));
+        if !CARD_READY.load(Ordering::SeqCst) {
+            crate::log::log(
+                "[cosmo-plus] tab cycle: unpatched build — Tab stays inert (no rotation, \
+                 no card override) so the cycle never shows a broken half-state",
+            );
+        }
     }
+    crate::state::hook("selection:tab-cycle-detour", ADDR_SELECT_UNITS, 0, SELECT_ORIGINAL_ADDR.load(Ordering::SeqCst) as usize);
 }
 
 /// Re-parse the forward/backward keys from config (in-place reload).
@@ -256,6 +340,63 @@ fn rearm_announce() {
         FWD_VK.load(Ordering::SeqCst),
         PREV_VK.load(Ordering::SeqCst)
     ));
+}
+
+/// Detour the engine's selection entry point so every fresh selection (click,
+/// box, recall, our own idle/larva picks, the mod's remix selections) latches a
+/// flag that resets the cycle — SC2's fresh-selection semantics. The detour
+/// replays the replaced prologue (`push ebp; mov ebp, esp`), latches the flag
+/// without clobbering registers, and tail-jumps to the original + 5. Installed
+/// only when the site is still the unpatched prologue; otherwise the hash
+/// fallback stands and the boot report says so.
+fn install_selection_detour() {
+    unsafe {
+        let first5: [u8; 5] = [
+            std::ptr::read(ADDR_SELECT_UNITS as *const u8),
+            std::ptr::read((ADDR_SELECT_UNITS + 1) as *const u8),
+            std::ptr::read((ADDR_SELECT_UNITS + 2) as *const u8),
+            std::ptr::read((ADDR_SELECT_UNITS + 3) as *const u8),
+            std::ptr::read((ADDR_SELECT_UNITS + 4) as *const u8),
+        ];
+        if first5 != [0x55, 0x8B, 0xEC, 0x83, 0xFF] {
+            crate::log::log(&format!(
+                "[cosmo-plus] tab cycle: selection entry point at 0x{ADDR_SELECT_UNITS:08X} \
+                 is {first5:02X?}; detour skipped (another plugin patched it?) — \
+                 fresh-selection reset falls back to the identity hash"
+            ));
+            return;
+        }
+        let orig = (ADDR_SELECT_UNITS + 5) as u32;
+        SELECT_ORIGINAL_ADDR.store(orig, Ordering::SeqCst);
+        let trampoline = selection_event_trampoline as *const () as usize as u32;
+        // E9 rel32 (site+5)
+        let rel = trampoline.wrapping_sub((ADDR_SELECT_UNITS + 5) as u32);
+        let api = crate::plus::api();
+        let patch: [u8; 5] = [0xE9, rel as u8, (rel >> 8) as u8, (rel >> 16) as u8, (rel >> 24) as u8];
+        let r = (api.write_exe_memory)(ADDR_SELECT_UNITS, patch.as_ptr(), 5);
+        SELECT_DETOUR_ARMED.store(r != 0, Ordering::SeqCst);
+        crate::log::log(&format!(
+            "[cosmo-plus] tab cycle: selection detour installed (0x{ADDR_SELECT_UNITS:08X} -> \
+             0x{trampoline:08X}, patch={r}); every fresh selection resets the cycle"
+        ));
+    }
+}
+
+/// 5-byte-detour trampoline: replay the replaced prologue, latch the selection
+/// event, jump back into the original function.
+#[unsafe(naked)]
+unsafe extern "C" fn selection_event_trampoline() {
+    core::arch::naked_asm!(
+        "push ebp",
+        "mov ebp, esp",
+        "pushad",
+        "mov eax, offset {flag}",
+        "mov byte ptr [eax], 1",
+        "popad",
+        "jmp dword ptr [{orig}]",
+        flag = sym SELECTION_EVENT,
+        orig = sym SELECT_ORIGINAL_ADDR,
+    );
 }
 
 fn install_hook() {
@@ -292,10 +433,18 @@ fn call_next(code: i32, wparam: usize, lparam: isize) -> isize {
     }
 }
 
+/// Any of Ctrl / Alt / Shift currently held.
+unsafe fn modifier_down() -> bool {
+    [VK_SHIFT, VK_CONTROL, VK_MENU].iter().any(|&vk| {
+        (GetAsyncKeyState(vk as i32) as u16 & 0x8000) != 0
+    })
+}
+
 /// WH_KEYBOARD hook: runs ahead of gptp's own hook. Swallows Tab (and the
 /// configured backward key) while a game is running, so the stock "hide terrain"
-/// binding never fires — the press is queued for the draw pass instead. Chat and
-/// modal dialogs are never interfered with.
+/// binding never fires — the press is queued for the draw pass instead. Chat,
+/// modal dialogs, Ctrl/Alt-modified presses and auto-repeats are never
+/// interfered with (auto-repeats are swallowed but not queued).
 unsafe extern "system" fn keyboard_proc(code: i32, wparam: usize, lparam: isize) -> isize {
     if code < 0 {
         return call_next(code, wparam, lparam);
@@ -333,16 +482,29 @@ unsafe extern "system" fn keyboard_proc(code: i32, wparam: usize, lparam: isize)
     let fwd_vk = FWD_VK.load(Ordering::SeqCst);
     let prev_vk = PREV_VK.load(Ordering::SeqCst);
     let is_fwd = fwd_vk != 0 && key == fwd_vk as u32;
-    let is_prev = (prev_vk != 0 && key == prev_vk as u32)
-        || (is_fwd && (GetAsyncKeyState(VK_SHIFT) as u16 & 0x8000) != 0);
-    if is_fwd || is_prev {
-        if crate::config::env_flag("CM_PLUS_TAB_DEBUG") {
-            crate::log::log("[cosmo-plus] tab debug: hook queued the press (swallowed)");
-        }
-        QUEUED.store(if is_prev { 2 } else { 1 }, Ordering::SeqCst);
-        return 1; // swallow: no terrain toggle, ever
+    if !is_fwd && (prev_vk == 0 || key != prev_vk as u32) {
+        return call_next(code, wparam, lparam);
     }
-    call_next(code, wparam, lparam)
+    // Modified presses stay with the game: Ctrl+Tab / Alt+Tab are not ours.
+    let shift = (GetAsyncKeyState(VK_SHIFT as i32) as u16 & 0x8000) != 0;
+    let ctrl = (GetAsyncKeyState(VK_CONTROL as i32) as u16 & 0x8000) != 0;
+    let alt = (GetAsyncKeyState(VK_MENU as i32) as u16 & 0x8000) != 0;
+    if ctrl || alt {
+        return call_next(code, wparam, lparam);
+    }
+    let is_prev = !is_fwd || shift; // backward key wins; Shift+forward goes back
+    // Bit 30 = the key was already down: auto-repeat. Swallow it, do not queue.
+    let repeat = lparam as u32 & (1 << 30) != 0;
+    if !repeat {
+        let _ = QUEUED.try_update(Ordering::SeqCst, Ordering::SeqCst, |q: i32| {
+            let nq = if is_prev { q.saturating_sub(1) } else { q.saturating_add(1) };
+            Some(nq.clamp(-4, 4))
+        });
+    }
+    if crate::config::env_flag("CM_PLUS_TAB_DEBUG") {
+        crate::log::log("[cosmo-plus] tab debug: hook queued the press (swallowed)");
+    }
+    1 // swallow: no terrain toggle, ever
 }
 
 /// Resolve the client selection table at runtime. The extender rewrites two
@@ -379,6 +541,86 @@ unsafe fn resolve_selection() -> bool {
          vanilla 12-slot table",
     );
     true
+}
+
+/// Resolve the canonical selection table (the extender's
+/// `new_active_selection`). The extender rewrites two immediates inside
+/// `is_selected_unit_group_enabled` with the array's runtime address and its
+/// one-past-end slot — the same anchor pattern as the client table, verified
+/// against the shipped exe. A valid pair is exactly `EXTENDED_LIMIT * 4`
+/// bytes apart; otherwise the stock 12-slot canonical array stands (logged
+/// loudly — the extender may leave it untouched on builds where selection
+/// stays vanilla).
+unsafe fn resolve_canonical() -> bool {
+    let cached = CANON_BASE.load(Ordering::SeqCst);
+    if cached != 0 && crate::overlay::readable_ptr(cached as *const u8, EXTENDED_LIMIT * 4) {
+        return true;
+    }
+    let base = std::ptr::read(ANCHOR_CANON_BASE as *const u32) as usize;
+    let end = std::ptr::read(ANCHOR_CANON_END as *const u32) as usize;
+    if base != 0 && end == base + EXTENDED_LIMIT * 4 {
+        CANON_BASE.store(base, Ordering::SeqCst);
+        CANON_LIMIT.store(EXTENDED_LIMIT, Ordering::SeqCst);
+        crate::log::log(&format!(
+            "[cosmo-plus] tab cycle: canonical selection table at 0x{base:08X} \
+             ({EXTENDED_LIMIT} slots, anchor 0x{ANCHOR_CANON_BASE:08X})"
+        ));
+        return true;
+    }
+    // Fallback: the stock 12-slot canonical array (the extender anchors did
+    // not validate — logged once, loudly).
+    CANON_BASE.store(VANILLA_CANON, Ordering::SeqCst);
+    CANON_LIMIT.store(VANILLA_LIMIT, Ordering::SeqCst);
+    static FAILED_ONCE: AtomicBool = AtomicBool::new(false);
+    if !FAILED_ONCE.swap(true, Ordering::SeqCst) {
+        crate::log::log(&format!(
+            "[cosmo-plus] tab cycle: canonical selection anchors did not validate \
+             (base 0x{base:08X}, end 0x{end:08X}); using the vanilla 12-slot table \
+             at 0x{VANILLA_CANON:08X}"
+        ));
+    }
+    true
+}
+
+/// Read a raw selection array as (unit ids, pointers) in array order. Stops at
+/// the first null slot (the engine nulls the tail on removal). `limit` caps the
+/// walk.
+unsafe fn read_array(base: usize, limit: usize) -> Option<(Vec<u16>, Vec<u32>)> {
+    let list = base as *const *mut Unit;
+    let mut ids = Vec::with_capacity(16);
+    let mut ptrs = Vec::with_capacity(16);
+    for i in 0..limit {
+        let unit = *list.add(i);
+        if unit.is_null() {
+            break;
+        }
+        ptrs.push(unit as u32);
+        ids.push((*unit).unit_id);
+    }
+    if ids.is_empty() {
+        return None;
+    }
+    Some((ids, ptrs))
+}
+
+/// The canonical selection as (derived ids, raw pointers), in canonical order.
+/// Returns `None` when the selection is empty or the table is not ready.
+pub(crate) unsafe fn read_canonical_selection() -> Option<(Vec<u16>, Vec<u32>)> {
+    if !resolve_canonical() {
+        return None;
+    }
+    let (ids, ptrs) = read_array(
+        CANON_BASE.load(Ordering::SeqCst),
+        CANON_LIMIT.load(Ordering::SeqCst).max(1),
+    )?;
+    // Fold the burrow state into the ids (SC2: burrowed/unburrowed are
+    // separate subgroups); the pointer array stays raw.
+    let derived: Vec<u16> = ids
+        .iter()
+        .zip(&ptrs)
+        .map(|(&id, &p)| derived_id(id, (*((p as *mut Unit))).order))
+        .collect();
+    Some((derived, ptrs))
 }
 
 /// The client selection as raw pointers, for the casting hook.
@@ -440,7 +682,7 @@ unsafe fn selftest_selection() -> Option<(Vec<u16>, Vec<u32>)> {
             return;
         }
         ptrs.push(u as u32);
-        ids.push(unit.unit_id);
+        ids.push(derived_id(unit.unit_id, unit.order));
     });
     if ids.len() < 2 {
         return None;
@@ -451,6 +693,54 @@ unsafe fn selftest_selection() -> Option<(Vec<u16>, Vec<u32>)> {
         &ids[..ids.len().min(200)]
     ));
     Some((ids, ptrs))
+}
+
+/// Build the canonical runs (cycle-worthy only): each run's key, derived id and
+/// member pointer set. Non-worthy runs are filtered out (the caveat: Tab visits
+/// spellcasters and ability carriers only).
+fn canonical_runs(ids: &[u16], ptrs: &[u32]) -> Vec<CanonRun> {
+    let runs = subgroup_runs(ids);
+    let worthy_ids: Vec<u16> = runs
+        .iter()
+        .filter(|r| unsafe { crate::abilities::cycle_worthy(base_id(r.unit_id)) })
+        .map(|r| r.unit_id)
+        .collect();
+    let keys = run_keys(&worthy_ids);
+    runs.iter()
+        .filter(|r| unsafe { crate::abilities::cycle_worthy(base_id(r.unit_id)) })
+        .zip(keys.iter())
+        .map(|(r, &key)| CanonRun {
+            key,
+            derived_id: r.unit_id,
+            ptrs: ptrs[r.start..r.start + r.len].to_vec(),
+        })
+        .collect()
+}
+
+/// Consume the selection-event flag (latched by the detour) and normalise the
+/// model against the current canonical selection. Returns the canonical state
+/// the caller should act on.
+unsafe fn normalize(selftest: bool) -> Option<(u64, Vec<u32>, Vec<CanonRun>)> {
+    let picked = if selftest {
+        selftest_selection()
+    } else {
+        read_canonical_selection()
+    };
+    let (ids, ptrs) = picked?;
+    let identity = selection_identity(&ptrs);
+    let runs = canonical_runs(&ids, &ptrs);
+    let keys: Vec<u32> = runs.iter().map(|r| r.key).collect();
+    let mut guard = MODEL.lock().unwrap();
+    let model = guard.get_or_insert_with(|| SubgroupModel::new(identity, keys.clone()));
+    if SELECTION_EVENT.swap(false, Ordering::SeqCst) {
+        let _ = model.select(identity, keys.clone());
+    }
+    Some((identity, keys, runs))
+}
+
+/// The active run's pointer set, by key.
+fn run_by_key(runs: &[CanonRun], key: u32) -> Option<&CanonRun> {
+    runs.iter().find(|r| r.key == key)
 }
 
 /// Called from the draw pass each frame (like `idle_workers::poll`). Consumes the
@@ -466,39 +756,23 @@ pub(crate) unsafe fn poll() {
     if queued == 0 {
         return;
     }
-    let dir: i32 = if queued == 2 { -1 } else { 1 };
+    let dir: i32 = if queued < 0 { -1 } else { 1 };
 
     let selftest = crate::config::env_flag("CM_PLUS_TAB_SELFTEST");
-    let picked = if selftest {
-        selftest_selection()
-    } else {
-        read_selection()
-    };
-    let Some((ids, ptrs)) = picked else {
+    let Some((identity, keys, runs)) = normalize(selftest) else {
         if crate::config::env_flag("CM_PLUS_TAB_DEBUG") {
             crate::log::log("[cosmo-plus] tab cycle debug: press with no readable selection");
         }
         return;
     };
 
-    // Feed the press through the pure SC2 subgroup model. Only the
-    // cycle-worthy runs (units with abilities, plus the always-cycle list)
-    // take part: Tab visits exactly those, SC2-style.
-    let identity = selection_identity(&ptrs);
-    let runs = subgroup_runs(&ids);
-    let keys: Vec<u32> = runs
-        .iter()
-        .filter(|r| crate::abilities::cycle_worthy(r.unit_id))
-        .filter_map(|r| ptrs.get(r.start).copied())
-        .filter(|&k| k != 0)
-        .collect();
     let action = {
         let mut guard = MODEL.lock().unwrap();
-        let model = guard.get_or_insert_with(|| SubgroupModel::new(identity, keys.clone()));
+        let model = guard.as_mut().expect("normalize created the model");
         model.press(identity, keys.clone(), dir)
     };
 
-    let (active, groups, active_key): (u32, u32, u32) = match action {
+    let (active_key, groups) = match action {
         SubgroupAction::Inert => {
             if crate::config::env_flag("CM_PLUS_TAB_DEBUG") {
                 crate::log::log(
@@ -507,74 +781,109 @@ pub(crate) unsafe fn poll() {
             }
             return;
         }
-        SubgroupAction::Reset { active_key, groups } => {
-            if crate::config::env_flag("CM_PLUS_TAB_DEBUG") {
-                crate::log::log(&format!(
-                    "[cosmo-plus] tab cycle debug: fresh selection (first subgroup key 0x{active_key:08X})"
-                ));
-            }
-            (0, groups, active_key)
-        }
-        SubgroupAction::Cycle {
-            active_key,
-            index,
-            groups,
-        } => (index, groups, active_key),
+        SubgroupAction::Reset { active_key, groups } => (active_key, groups),
+        SubgroupAction::Cycle { active_key, groups, .. } => (active_key, groups),
     };
 
-    // The active subgroup's run in the CURRENT (possibly engine-reordered)
-    // array, resolved by its unique first-unit token (duplicate unit types
-    // may form several runs); make it first and aim the engine's card at it.
-    let Some(run) = runs
-        .iter()
-        .find(|r| ptrs.get(r.start).copied() == Some(active_key))
-        .cloned()
-    else {
+    let Some(run) = run_by_key(&runs, active_key) else {
         return;
     };
-    let active_id = run.unit_id;
-    let rep = if selftest { 0 } else { apply_subgroup(&run, &ptrs) };
+    let active_id = run.derived_id;
+    let rep = if selftest { 0 } else { apply_subgroup(run, identity, &keys, &runs) };
 
-    {
+    // Only when the card override is available does anything visibly change
+    // (apply_subgroup is inert without it) — never show an indicator for a
+    // press that did nothing.
+    if CARD_READY.load(Ordering::SeqCst) {
         let mut d = DISPLAY.lock().unwrap();
-        d.active = active;
+        d.active = keys.iter().position(|&k| k == active_key).unwrap_or(0) as u32;
         d.groups = groups;
         d.active_id = active_id;
         d.active_ptr = rep;
+        SHOW_UNTIL_FRAME.store(frame.saturating_add(INDICATOR_FRAMES), Ordering::SeqCst);
     }
-    SHOW_UNTIL_FRAME.store(frame.saturating_add(INDICATOR_FRAMES), Ordering::SeqCst);
     crate::log::log(&format!(
-        "[cosmo-plus] tab cycle: active subgroup {}/{} (id {}, selection[0] now {})",
-        active + 1,
+        "[cosmo-plus] tab cycle: active subgroup {}/{} (id {})",
+        keys.iter().position(|&k| k == active_key).unwrap_or(0) + 1,
         groups,
-        active_id,
-        ptrs.get(run.start).copied().unwrap_or(0),
+        base_id(active_id),
     ));
 }
 
 /// Rotate the subgroup run to the front of the client table, then drive the
 /// engine's card at the run's representative unit. Returns that unit pointer.
-unsafe fn apply_subgroup(run: &SubgroupRun, ptrs: &[u32]) -> u32 {
-    if run.start != 0 {
-        rotate_selection(run.start, run.len, ptrs.len());
+/// Inert (no rotation at all) when the fork's card override is unavailable.
+unsafe fn apply_subgroup(
+    run: &CanonRun,
+    identity: u64,
+    _keys: &[u32],
+    _runs: &[CanonRun],
+) -> u32 {
+    if !CARD_READY.load(Ordering::SeqCst) {
+        return run.ptrs[0];
     }
-    let rep = representative(run, ptrs);
-    write_card(rep);
+    rotate_client_to(&run.ptrs);
+    let rep = representative(run);
+    write_card(rep, base_id(run.derived_id));
+    let _ = identity;
     rep
+}
+
+/// Rotate the engine's client selection array so the given pointer set leads.
+/// The write is strictly bounded by the live client count and only includes
+/// lead members actually present in the client table (the canonical table can
+/// carry stale pointers beyond the engine's live count — writing them, or
+/// writing more slots than the count, would corrupt the extender's struct).
+/// The tail keeps every client-selected unit not in the set, in its current
+/// order; the count is untouched.
+unsafe fn rotate_client_to(lead: &[u32]) -> bool {
+    let base = SEL_BASE.load(Ordering::SeqCst);
+    if base == 0 {
+        return false;
+    }
+    let limit = SEL_LIMIT.load(Ordering::SeqCst).max(1);
+    let count = (std::ptr::read(CLIENT_SELECTION_COUNT as *const u8) as usize).min(limit);
+    if count == 0 {
+        return false;
+    }
+    let list = base as *const *mut Unit;
+    let mut client: Vec<u32> = Vec::with_capacity(count);
+    for i in 0..count {
+        let p = *list.add(i) as u32;
+        if p != 0 {
+            client.push(p);
+        }
+    }
+    let mut rotated: Vec<u32> = Vec::with_capacity(client.len());
+    // Lead members present in the client table, in lead order (the canonical
+    // run order the model wants first).
+    for &p in lead {
+        if client.contains(&p) {
+            rotated.push(p);
+        }
+    }
+    for &p in &client {
+        if !rotated.contains(&p) {
+            rotated.push(p);
+        }
+    }
+    let list_mut = base as *mut *mut Unit;
+    for (i, &p) in rotated.iter().enumerate() {
+        *list_mut.add(i) = p as *mut Unit;
+    }
+    true
 }
 
 /// The engine's card builder (`get_selected_unit`) skips units still under
 /// construction, so the representative mirrors that: the run's first completed
 /// unit, falling back to the run's first unit.
-unsafe fn representative(run: &SubgroupRun, ptrs: &[u32]) -> u32 {
-    let end = (run.start + run.len).min(ptrs.len());
-    for i in run.start..end {
-        let unit = ptrs[i] as *mut Unit;
-        if (*unit).remaining_build_time == 0 {
-            return ptrs[i];
+unsafe fn representative(run: &CanonRun) -> u32 {
+    for &p in &run.ptrs {
+        if (*((p as *mut Unit))).remaining_build_time == 0 {
+            return p;
         }
     }
-    ptrs[run.start.min(ptrs.len().saturating_sub(1))]
+    run.ptrs[0]
 }
 
 /// Aim the portrait and the card at the active subgroup's unit: the engine's
@@ -582,10 +891,22 @@ unsafe fn representative(run: &SubgroupRun, ptrs: &[u32]) -> u32 {
 /// override) while the first completed unit of the table (our representative)
 /// supplies the card's per-unit state, so the subgroup's spells show and
 /// dispatch exactly like SC2.
-unsafe fn write_card(rep: u32) {
+///
+/// The buttonset id is the representative's LIVE buttonset when it is
+/// completed (the fork supports per-unit buttonset overrides, e.g. infested
+/// units — `ValueButtonsetOverride`); for a run with no completed unit (a run
+/// of morphing hatcheries) it is the unit TYPE's id (buttonset id == unit
+/// id), so the card shows the real ability card instead of the construction
+/// placeholder.
+unsafe fn write_card(rep: u32, fallback_buttonset_id: u16) {
     let unit = rep as *mut Unit;
+    let buttonset_id = if (*unit).remaining_build_time == 0 {
+        (*unit).buttons
+    } else {
+        fallback_buttonset_id
+    };
     std::ptr::write(G_ACTIVE_PORTRAIT_UNIT as *mut u32, rep);
-    std::ptr::write(G_CURRENT_BUTTONSET_ID as *mut u16, (*unit).buttons);
+    std::ptr::write(G_CURRENT_BUTTONSET_ID as *mut u16, buttonset_id);
     if CARD_READY.load(Ordering::SeqCst) {
         core::arch::asm!(
             "pushad",
@@ -608,86 +929,87 @@ pub(crate) fn reset() {
     };
     QUEUED.store(0, Ordering::SeqCst);
     SHOW_UNTIL_FRAME.store(0, Ordering::SeqCst);
+    SELECTION_EVENT.store(false, Ordering::SeqCst);
 }
 
-/// Called from the draw pass every frame (after `poll`): the per-frame view
-/// that keeps the engine aimed at the active subgroup. On a fresh selection
-/// (identity change) it resets to the first subgroup — SC2 shows the first
-/// subgroup's card the moment a mixed selection is made, before any Tab. While
-/// the cycle is active it re-asserts the rotation and card override whenever
-/// the engine re-copied its canonical selection order or re-derived the
-/// GroupMixed card (its own selection-change events).
+/// Called from the draw pass every frame (before `poll`): the per-frame view
+/// that keeps the engine aimed at the active subgroup. Normalises the model
+/// against the current canonical selection (keep the active subgroup while it
+/// has members; reset to the first worthy one when it vanished or a selection
+/// event fired), then re-asserts the rotation and card override whenever the
+/// engine re-copied its canonical selection order or re-derived the GroupMixed
+/// card.
 pub(crate) unsafe fn apply_display() {
     if crate::frame::frame_count() == 0 {
         return;
     }
-    let Some((ids, ptrs)) = read_selection() else {
+    let selftest = crate::config::env_flag("CM_PLUS_TAB_SELFTEST");
+    let Some((identity, keys, runs)) = normalize(selftest) else {
         deactivate();
         return;
     };
-    let identity = selection_identity(&ptrs);
-    let runs = subgroup_runs(&ids);
-    let keys: Vec<u32> = runs
-        .iter()
-        .filter(|r| crate::abilities::cycle_worthy(r.unit_id))
-        .filter_map(|r| ptrs.get(r.start).copied())
-        .filter(|&k| k != 0)
-        .collect();
-    let action = {
+    let active_key = {
         let mut guard = MODEL.lock().unwrap();
-        let model = guard.get_or_insert_with(|| SubgroupModel::new(identity, keys.clone()));
-        model.ensure(identity, keys.clone())
-    };
-    let active_key = match action {
-        SubgroupAction::Inert => {
-            deactivate();
-            return;
+        let model = guard.as_mut().expect("normalize created the model");
+        match model.ensure(identity, keys.clone()) {
+            SubgroupAction::Inert => {
+                deactivate();
+                return;
+            }
+            SubgroupAction::Reset { active_key, .. } => active_key,
+            SubgroupAction::Cycle { active_key, .. } => active_key,
         }
-        SubgroupAction::Reset { active_key, .. } => active_key,
-        SubgroupAction::Cycle { active_key, .. } => active_key,
     };
 
-    let Some(run) = runs
-        .iter()
-        .find(|r| ptrs.get(r.start).copied() == Some(active_key))
-        .cloned()
-    else {
+    let Some(run) = run_by_key(&runs, active_key) else {
         deactivate();
         return;
     };
-    let active_id = run.unit_id;
-    let rep = representative(&run, &ptrs);
+    let active_id = run.derived_id;
+    let rep = representative(run);
 
-    // Re-assert only when the engine clobbered our state: the run moved
-    // (canonical re-copy), the portrait was re-derived, or the buttonset id
-    // was reset to GroupMixed. Otherwise the card already shows the subgroup
-    // and a per-frame rebuild would only flicker.
+    // Re-assert only when the engine clobbered our state: the run no longer
+    // leads the client table, the portrait was re-derived, or the buttonset id
+    // was reset. Otherwise the card already shows the subgroup and a per-frame
+    // rebuild would only flicker.
     let portrait = std::ptr::read(G_ACTIVE_PORTRAIT_UNIT as *const u32);
     let card = std::ptr::read(G_CURRENT_BUTTONSET_ID as *const u16);
-    let ok = run.start == 0
+    let leads = client_leads_with(&run.ptrs);
+    let ok = leads
         && portrait == rep
-        && card == (*(rep as *mut Unit)).buttons;
+        && card == base_id(active_id);
     if !ok {
-        apply_subgroup(&run, &ptrs);
+        apply_subgroup(run, identity, &keys, &runs);
     }
 
     {
         let mut d = DISPLAY.lock().unwrap();
-        d.active = if runs.is_empty() {
-            0
-        } else {
-            runs.iter()
-                .position(|r| r.unit_id == active_id)
-                .unwrap_or(0) as u32
-        };
-        d.groups = runs.len() as u32;
+        d.active = keys.iter().position(|&k| k == active_key).unwrap_or(0) as u32;
+        d.groups = keys.len() as u32;
         d.active_id = active_id;
         d.active_ptr = rep;
     }
 }
 
+/// Whether the client table currently starts with the run's full pointer set
+/// (set equality on the leading `len` slots, order preserved).
+unsafe fn client_leads_with(lead: &[u32]) -> bool {
+    let base = SEL_BASE.load(Ordering::SeqCst);
+    if base == 0 {
+        return false;
+    }
+    let list = base as *const *mut Unit;
+    for (i, &p) in lead.iter().enumerate() {
+        if *list.add(i) as u32 != p {
+            return false;
+        }
+    }
+    true
+}
+
 /// Leave the active-cycle state: restore the engine's own card (single-unit or
-/// GroupMixed) once, then clear the display. No-op while already inactive.
+/// GroupMixed) and its own portrait derivation once, then clear the display.
+/// No-op while already inactive.
 unsafe fn deactivate() {
     let mut d = DISPLAY.lock().unwrap();
     if d.groups >= 2 {
@@ -696,6 +1018,13 @@ unsafe fn deactivate() {
         d.active_id = 0;
         d.active_ptr = 0;
         if CARD_READY.load(Ordering::SeqCst) {
+            // Let the engine re-derive both the card AND the portrait from the
+            // canonical selection (the portrait must not linger on the wrong
+            // unit). The buttonset-id write below is transient: the vanilla
+            // `update_buttonset` re-derives the id inside the call, so the
+            // placeholder value (0 = the generic card) only survives between
+            // this write and the call.
+            std::ptr::write(G_CURRENT_BUTTONSET_ID as *mut u16, 0);
             core::arch::asm!(
                 "pushad",
                 "call dword ptr [{func}]",
@@ -707,33 +1036,9 @@ unsafe fn deactivate() {
     }
 }
 
-/// Rotate the engine's client selection array so the run
-/// `[run_start, run_start + run_len)` is first. Reads the whole selection,
-/// then writes it back rotated; the count is untouched.
-unsafe fn rotate_selection(run_start: usize, run_len: usize, count: usize) -> bool {
-    let base = SEL_BASE.load(Ordering::SeqCst);
-    if base == 0 {
-        return false;
-    }
-    let list = base as *mut *mut Unit;
-    let mut rotated: Vec<u32> = Vec::with_capacity(count);
-    for i in run_start..run_start + run_len {
-        rotated.push(*list.add(i) as u32);
-    }
-    for i in 0..run_start {
-        rotated.push(*list.add(i) as u32);
-    }
-    for i in run_start + run_len..count {
-        rotated.push(*list.add(i) as u32);
-    }
-    for (i, &p) in rotated.iter().enumerate() {
-        *list.add(i) = p as *mut Unit;
-    }
-    true
-}
-
 /// Indicator state for the overlay: `Some((active, total))` while the Tab indicator
-/// should be visible.
+/// should be visible. Counts are the cycle-worthy groups only, so the indicator
+/// matches the cycle the player actually tabs through.
 pub(crate) fn indicator(frame: u32) -> Option<(u32, u32)> {
     if frame == 0 || frame > SHOW_UNTIL_FRAME.load(Ordering::SeqCst) {
         return None;
@@ -745,7 +1050,55 @@ pub(crate) fn indicator(frame: u32) -> Option<(u32, u32)> {
     Some((d.active + 1, d.groups))
 }
 
-/// The active subgroup's unit id (0 = none), for the indicator's unit name.
+/// The active subgroup's base unit id (0 = none), for the indicator's unit name.
 pub(crate) fn active_unit_id() -> u16 {
-    DISPLAY.lock().unwrap().active_id
+    base_id(DISPLAY.lock().unwrap().active_id)
+}
+
+/// The units an ability-class order should be narrowed to (the tab cycle's
+/// SC2 subgroup parity rule). Deterministic across peers: computed ONLY from
+/// the canonical selection (synced, never rotated by us) — never from the
+/// viewer-local client table or model state, because the command hook runs on
+/// both peers with the same command bytes and both must narrow identically.
+///
+/// Returns `None` (broadcast — the normal engine path) when:
+///   * the tab cycle is disabled or unarmed, or `CM_PLUS_NO_TAB_NARROW` is set
+///     (bisection kill switch);
+///   * the order is generic (move/attack/stop/harvest/build/train — those keep
+///     broadcasting, exactly like SC2's plain orders);
+///   * the selection is single-typed (the first worthy run IS the whole
+///     selection — narrowing would be a no-op);
+///   * no worthy run's card carries the order (broadcasting it is a no-op for
+///     every selected unit anyway).
+///
+/// Otherwise the FIRST cycle-worthy canonical run whose card carries the
+/// order — the subgroup the player's Tab UI shows for it. Shared orders
+/// (burrow on zerglings AND lurkers) narrow to the first such run. Known,
+/// documented deviation: after Tab-ing to a LATER subgroup the narrowing
+/// still targets the first capability-bearing run (SC2 would target the
+/// tabbed subgroup, but that state is viewer-local and syncing it is a
+/// future netcode feature).
+pub(crate) unsafe fn narrow_targets(order: u8) -> Option<Vec<u32>> {
+    if crate::config::env_flag("CM_PLUS_NO_TAB_CYCLE")
+        || crate::config::env_flag("CM_PLUS_NO_TAB_NARROW")
+        || FWD_VK.load(Ordering::SeqCst) == 0
+    {
+        return None;
+    }
+    if !crate::abilities::is_ability_order(order) {
+        return None;
+    }
+    let (ids, ptrs) = read_canonical_selection()?;
+    let runs = canonical_runs(&ids, &ptrs);
+    // Prefer the first worthy run whose card actually carries this order
+    // (deterministic: the buttonset table is the same on every peer), so a
+    // templar-only spell never narrows to an archon run that would eat it.
+    let first = runs
+        .iter()
+        .find(|r| crate::abilities::has_order(base_id(r.derived_id), order))
+        .or_else(|| runs.first())?;
+    if first.ptrs.len() >= ptrs.len() {
+        return None; // single-typed selection: broadcast is the same thing
+    }
+    Some(first.ptrs.clone())
 }

@@ -81,10 +81,10 @@ const CHANGES_LINES: &[&str] = &[
     "Advanced workers: +25 gas, much shorter build times",
     "Ultraload: +50% move speed, 20-tile depot radius",
     "Zoom: player floor 100% instead of the default 200%",
-    "Smart Tab: cycles the active subgroup (units and buildings)",
+    "Smart Tab: cycles caster/ability subgroups (replaces hide-terrain)",
     "Camera pan: Ctrl + WASD or arrow keys",
-    "Idle workers: ` (backtick) selects the next idle worker",
-    "Larva pick: CapsLock, type a count, Enter",
+    "Idle workers: F9 selects the next idle worker (key configurable)",
+    "Larva pick: Ctrl+Space, type a count, Enter (key configurable)",
     "Minimap: C1-C8 camera labels and nydus canal numbers",
     "Saturation counts above your own town halls and gas",
     "Lobby: Anti Meta (46) and Draft (47) game types",
@@ -317,8 +317,14 @@ unsafe extern "stdcall" fn draw_hook(surface: *mut core::ffi::c_void, bounds: *m
     crate::larva_pick::draw();
     // Smart Tab: rotate the selection and drive the engine's card at the active
     // subgroup here in the draw pass (UI-safe). Never in the sim step — see frame.rs.
-    crate::tab_cycle::poll();
+    // apply_display runs BEFORE poll so a Tab in the same frame as a fresh
+    // selection is normalised against it first (otherwise the first Tab after
+    // a fast box-select would be eaten).
     crate::tab_cycle::apply_display();
+    crate::tab_cycle::poll();
+    // Global production queue (config-driven 2x icons; see queue.rs).
+    crate::queue::poll_hide();
+    crate::queue::draw();
     // Rollback bug-capture confirmation (drawn regardless of the overlay switch).
     draw_capture_confirmation();
     // Dev REPL: poll the command file and draw transient probes.
@@ -361,13 +367,15 @@ unsafe fn draw_world_annotations() {
     set_font_handle(core::ptr::null_mut());
 }
 
-/// The idle-worker badge: `Idle: N` in the small font, drawn camera-relative
-/// at the top-left of the view — the coordinate space the Changes panel uses,
-/// the one that has always been visible on this engine. Screen-fixed spots
-/// (minimap anchors, world-surface screen coordinates) vanish inside the zoom
-/// crop or under the HUD, so the badge follows the view instead: always
-/// visible at every zoom, a few pixels lower than the original 35f0ffb
-/// position and text-only (no icon, so the whole badge is smaller).
+/// The idle-worker counter, SC2-style: a screen-fixed worker icon + count at
+/// the bottom-left (above the minimap), drawn through the zoom-crop mapping so
+/// it stays at the same screen position at every zoom level, with the icon
+/// size-compensated so it also stays the same screen SIZE. The count is drawn
+/// after the icon so it survives any blit quirk. Grey with the race's worker
+/// icon at 0, yellow when workers are idle (SC2 shows the indicator whenever
+/// the value is meaningful; a fixed counter is also what the user asked for:
+/// "a text screen that is fixed on the screen that shows how many idle
+/// workers you have").
 pub(crate) unsafe fn draw_idle_counter() {
     if crate::frame::frame_count() == 0 {
         return; // not in a game
@@ -382,31 +390,46 @@ pub(crate) unsafe fn draw_idle_counter() {
     if !crate::repl::badge_shown() {
         return;
     }
-    let n = crate::idle_workers::count_idle(local);
+    let (n, icon) = crate::idle_workers::idle_count_and_icon(local);
     static FIRST_DRAW: std::sync::Once = std::sync::Once::new();
     FIRST_DRAW.call_once(|| {
         crate::log::log(&format!("[cosmo-plus] idle counter: first draw n={n}"));
     });
 
-    let (cx, cy) = camera();
-    let (ox, oy) = crate::repl::badge_pin().unwrap_or((4, 30));
-    let text_x = cx + ox;
-    let text_y = cy + oy;
+    // Screen-fixed position: the SC2 lower-left corner is, in this engine,
+    // above the minimap panel (the corner itself is the unit panel). The
+    // REPL badge pin overrides for diagnostics.
+    let (ox, oy) = crate::repl::badge_pin().unwrap_or((4, 314));
+    // Map into the zoom crop once (position fixed on screen at every zoom).
+    let (tx, ty) = crate::hud::screen_to_surface(ox, oy);
+
+    // The race's greyed worker at 0 (SC2 shows the worker button greyed), the
+    // first idle worker's icon otherwise. Icon size compensated so it renders
+    // the same screen size at every zoom.
+    let race = player_race(local as u8);
+    let icon_id = icon.unwrap_or_else(|| tier1_worker_icon(race));
+    let units = crate::hud::zoom_units() as i32;
+    let iw = 24 * 10000 / units;
+    let ih = 22 * 10000 / units;
+    if crate::icon::draw_unit_icon_scaled(icon_id, tx, ty, iw.max(1), ih.max(1)).is_none() {
+        return; // cmdicons GRP not loaded yet
+    }
 
     set_font_handle(font);
     write_draw_text(0, 0, 0x7FFF, 0x7FFF);
     *(G_PRINT_XY_ALIGNMENT as *mut u8) = 0x11;
 
-    // Shadow, then "Idle: N" in yellow (grey at 0).
-    let mut buf = [0u8; 16];
+    // Shadow, then "Idle Workers: N" in yellow (grey at 0).
+    let mut buf = [0u8; 24];
     buf.fill(0);
-    let label = format!("Idle: {n}");
+    let label = format!("Idle Workers: {n}");
     let len = label.len().min(buf.len() - 1);
     buf[..len].copy_from_slice(&label.as_bytes()[..len]);
+    let text_x = tx + iw + 4;
     get_color_handle(text_color::BLACK);
-    bw_print_xy(buf.as_ptr(), text_x + 1, text_y + 1);
+    bw_print_xy(buf.as_ptr(), text_x + 1, ty + 1);
     get_color_handle(if n > 0 { text_color::YELLOW } else { text_color::GREY2 });
-    bw_print_xy(buf.as_ptr(), text_x, text_y);
+    bw_print_xy(buf.as_ptr(), text_x, ty);
     set_font_handle(core::ptr::null_mut());
 }
 
@@ -424,8 +447,10 @@ fn tier1_worker_icon(race: u8) -> u32 {
 }
 
 /// The Tab subgroup indicator (`Tab 2/3 · Marines`), drawn for ~1.5 s after each Tab
-/// press. Drawn by hud.rs through the minimap dispatch on the screen buffer, so the
-/// position is a plain screen coordinate and stays visible at every zoom.
+/// press. Camera-relative like the Changes panel, so it stays inside the view at
+/// every zoom; its text renders at world scale (2x on screen at 200% zoom) —
+/// the same deliberate trade-off the Changes panel makes (constant-size
+/// screen-fixed text would need a scaled font this pipeline does not have).
 pub(crate) unsafe fn draw_tab_indicator() {
     let Some((active, total)) = crate::tab_cycle::indicator(crate::frame::frame_count()) else {
         return;
@@ -850,6 +875,12 @@ pub(crate) unsafe fn poll_changes() {
             if now { "shown" } else { "hidden" }
         ));
     }
+}
+
+/// Whether the changes panel is currently open (the queue overlay suppresses
+/// itself while it is — they share the top-left corner).
+pub(crate) fn changes_visible() -> bool {
+    CHANGES_VISIBLE.load(Ordering::SeqCst)
 }
 
 /// Draw the changes panel, or a short "how to open it" hint for the first ~20 s

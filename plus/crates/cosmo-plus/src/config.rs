@@ -34,6 +34,7 @@ const YML_KEYS: &[(&str, &str)] = &[
     ("idle-badge-x", "CM_PLUS_IDLE_BADGE_X"),
     ("idle-badge-y", "CM_PLUS_IDLE_BADGE_Y"),
     ("zoom-floor", "CM_PLUS_ZOOM_PLAYER_MIN"),
+    ("queue-icon-scale", "CM_PLUS_QUEUE_ICON_SCALE"),
     ("mode", "CM_PLUS_MODE"),
     ("saturation", "CM_PLUS_SATURATION"),
     ("no-tab-cycle", "CM_PLUS_NO_TAB_CYCLE"),

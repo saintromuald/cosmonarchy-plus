@@ -1,0 +1,120 @@
+Adds the AntiMeta game mode to the mod's mode architecture (Cosmonarchy
+Plus / zz-cosmo-plus.qdp applies the actual start randomisation). Without
+this patch the shipped gptp.qdp renders a BLANK chat-room "Game Mode" label
+and a "Custom" Discord presence for game type 46, and bw::get_game_kind()
+returns Invalid. With it: magic_enum::enum_name(GameType::AntiMeta) renders
+in the chat-room/join labels, get_game_kind() resolves, and the mode-init
+switch documents that Plus performs the roll.
+
+Audit of GameKind:: equality/switch sites (all equality checks, benign for a
+melee-like mode):
+  BW/api.cpp: get_game_kind (patched), DarkAges multiplier (equality),
+  hooks/game_hooks.cpp: mode-init switch (patched, no-op),
+  CM/cm_utils.cpp: game_kind_to_string + game_kind_to_filename_string
+    (patched; the latter ASSERTED on unknown kinds — the one real hazard),
+    game_kind_has_neutral_hostile / has_zombies / doubles_units (equality),
+  hooks/unit_stats/sight_range.cpp, hooks/psi_field.cpp,
+  hooks/tactical_ai.cpp, hooks/unit_destructor_special.cpp,
+  hooks/unit_speed.cpp, hooks/interface/buttonsets.cpp,
+  stats_panel/trigger_hooks/Discord/ReplayKraken (equality or switch-with-
+  default).
+Also audit magic_enum::enum_values<GameType> iterators if any future code
+enumerates modes (none at the time of writing; the Create Game dropdown is
+driven by templates.lst, not the enum).
+
+IMPORTANT (peer gate): do NOT ship "Anti Meta(1).got" inside the mod's mpq
+templates. The map-authorisation check boots clients whose template list
+lacks the entry, and that boot is exactly the version lock keeping vanilla
+clients out of Anti Meta lobbies (they would join, not roll, and desync).
+The template ships exclusively through Cosmonarchy Plus's launcher staging.
+diff --git i/BW/api.cpp w/BW/api.cpp
+index 7781b1b68..f5e842896 100644
+--- i/BW/api.cpp
++++ w/BW/api.cpp
+@@ -3356,6 +3356,7 @@ GameKind get_game_kind() {
+         case GameType::Deathmarch:   return GameKind::Deathmarch;
+         case GameType::Brotherhood:  return GameKind::Brotherhood;
+         case GameType::Zombocalypse: return GameKind::Zombocalypse;
++        case GameType::AntiMeta:     return GameKind::AntiMeta;
+ 
+         case GameType::Debug:        return GameKind::Debug;
+     }
+diff --git i/BW/api.h w/BW/api.h
+index 1e4c29d82..d295fe54b 100644
+--- i/BW/api.h
++++ w/BW/api.h
+@@ -74,6 +74,15 @@ enum class GameKind {
+     Ranked,
+ 
+     Debug,
++
++    // Cosmonarchy Plus game modes. The roll itself (randomised symmetric
++    // start: 4-8 workers, 100-300/0-125 resources in steps of 5, seeded from
++    // the synced RNG state) is performed by the zz-cosmo-plus.qdp plugin;
++    // the mod only carries the enum/kind so the lobby, chat-room and
++    // presence labels render properly (magic_enum has no name for the
++    // template's game-type byte otherwise).
++    AntiMeta,
++
+     Count,
+ };
+ 
+diff --git i/BW/enumerations.h w/BW/enumerations.h
+index 991216757..20303baca 100644
+--- i/BW/enumerations.h
++++ w/BW/enumerations.h
+@@ -635,6 +635,13 @@ enum Enum : u8 {
+     Brotherhood    = 42,
+     Zombocalypse   = 43,
+     Ranked         = 44,
++
++    // Cosmonarchy Plus: the "Anti Meta" lobby template ships game-type byte
++    // 46 (45 is taken by Mindshare's own template). The start randomisation
++    // is applied by zz-cosmo-plus.qdp; the enum entry exists so
++    // get_game_kind() and the lobby labels (magic_enum::enum_name) resolve
++    // instead of rendering a blank chat-room label.
++    AntiMeta       = 46,
+ };
+ }
+ 
+diff --git i/CM/cm_utils.cpp w/CM/cm_utils.cpp
+index e5819ae01..309b3f335 100644
+--- i/CM/cm_utils.cpp
++++ w/CM/cm_utils.cpp
+@@ -213,6 +213,9 @@ const char* game_kind_to_string(GameKind game_kind) {
+         case GameKind::Ranked: {
+             return "Ranked";
+         } break;
++        case GameKind::AntiMeta: {
++            return "Anti Meta";
++        } break;
+     }
+     return "Custom";
+ }
+@@ -234,6 +237,7 @@ const char* game_kind_to_filename_string(GameKind game_kind) {
+         case GameKind::Brotherhood:  return "Brotherhood(1)";
+         case GameKind::Zombocalypse: return "Zombocalypse(1)";
+         case GameKind::Ranked:       return "Ranked(1)";
++        case GameKind::AntiMeta:     return "Anti Meta(1)";
+     }
+     assert(false);
+     return "";
+diff --git i/hooks/game_hooks.cpp w/hooks/game_hooks.cpp
+index 96c414423..3bf257b1d 100644
+--- i/hooks/game_hooks.cpp
++++ w/hooks/game_hooks.cpp
+@@ -751,6 +751,14 @@ namespace hooks {
+                     bw::println(TextColor::White, "\t{} was assigned {}{}", player.name, race_color, race_name);
+                 }
+             } break;
++            case GameKind::AntiMeta: {
++                // Cosmonarchy Plus game mode: the symmetric start randomisation
++                // (4-8 workers, 100-300/0-125 resources in steps of 5, from the
++                // shared RNG seed) is applied by the zz-cosmo-plus.qdp plugin at
++                // the first game ticks. The mod itself needs no init here — the
++                // kind exists so the mode is not GameKind::Invalid and the
++                // lobby labels render. Melee-like behaviour otherwise.
++            } break;
+         }
+         if (g_active_game_mode) {
+             g_active_game_mode->on_init();

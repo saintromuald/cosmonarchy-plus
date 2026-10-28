@@ -58,7 +58,11 @@ pub(crate) fn install() {
         crate::log::log("[cosmo-plus] hud overlay: gptp.qdp not loaded; disabled");
         return;
     };
-    let delta = base as u32 - 0x1000_0000u32;
+    // gptp.qdp's preferred base is 0x1000_0000, but Wine frequently loads it
+    // below that (e.g. 0x0256_0000). The delta is modular arithmetic on u32
+    // addresses — it must wrap, so use wrapping_sub (a plain subtraction
+    // panics in debug builds and kills the game at boot).
+    let delta = (base as u32).wrapping_sub(0x1000_0000u32);
     let units = UNITS_PREFERRED + delta;
     ZOOM_UNITS_ADDR.store(units, Ordering::SeqCst);
     ZOOM_CROP_ADDR.store(units + CROP_OFFSET as u32, Ordering::SeqCst);

@@ -31,6 +31,12 @@
 #
 # CM_PLUS_NO_TAB_CYCLE=1
 
+# Disable ONLY the subgroup-scoped ability narrowing (Tab cycling itself keeps
+# working, but ability orders on a mixed selection broadcast like vanilla BW —
+# bisection/diagnostic switch).
+#
+# CM_PLUS_NO_TAB_NARROW=1
+
 # The Tab subgroup cycle visits ONLY spellcasters and units/buildings with
 # special abilities (the cycle skips pure production buildings and
 # attack-only units). Forward key (default TAB; Shift+forward goes backward)

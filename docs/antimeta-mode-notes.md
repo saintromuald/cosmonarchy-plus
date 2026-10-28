@@ -101,9 +101,12 @@ Uprising / The Turning / Embraced):
     and spawn are deterministic functions of (seed, current unit state), so re-running them
     is a no-op once converged, and a rollback re-simulation that restores a snapshot from
     before the first application re-applies the identical roll and converges;
-  * the resource overwrite and the on-screen announce fire on **frame 1 only** — the hook
-    runs after StepObjects, so overwriting resources on later frames would discard that
-    frame's mining income (deterministic on both peers, but wrong economy);
+  * the resource overwrite runs on **every execution of frame 1** (live or resim — a pure
+    idempotent overwrite, so a resim re-entering frame 1 converges with the live branch);
+    later window frames must NOT rewrite resources (the hook runs after StepObjects, so
+    overwriting on frames 2-4 would discard that frame's mining income — deterministic on
+    both peers, but wrong economy); the on-screen announce and the per-player logs fire
+    once per game;
   * frames 2..4 re-normalising the worker count is the mode's contract ("every player has
     exactly target workers at start"), so a trigger that changes the count in that window
     is overridden — accepted and documented.

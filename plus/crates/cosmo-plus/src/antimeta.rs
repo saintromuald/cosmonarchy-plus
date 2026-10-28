@@ -252,6 +252,7 @@ static LAST_FRAME: AtomicU32 = AtomicU32::new(0);
 static ENABLED_RESOLVED: AtomicBool = AtomicBool::new(false);
 static MODE_ON: AtomicBool = AtomicBool::new(false);
 static SEED_CACHE: AtomicU32 = AtomicU32::new(0);
+static SEED_READY: AtomicBool = AtomicBool::new(false);
 static FIRST_APPLICATION: AtomicBool = AtomicBool::new(false);
 
 /// The window (sim frames, inclusive) during which the roll re-applies
@@ -286,6 +287,7 @@ pub(crate) unsafe fn on_game_tick() {
         ENABLED_RESOLVED.store(false, Ordering::SeqCst);
         MODE_ON.store(false, Ordering::SeqCst);
         SEED_CACHE.store(0, Ordering::SeqCst);
+        SEED_READY.store(false, Ordering::SeqCst);
         FIRST_APPLICATION.store(false, Ordering::SeqCst);
     }
     if frame == 0 || frame > APPLY_WINDOW_END {
@@ -305,7 +307,7 @@ pub(crate) unsafe fn on_game_tick() {
         return;
     }
     let first = !FIRST_APPLICATION.swap(true, Ordering::SeqCst);
-    apply_roll(first);
+    apply_roll(frame, first);
 }
 
 /// `g_game_data.is_replay` (0x005967F8 + 0x32).
@@ -315,15 +317,23 @@ pub(crate) fn is_replay() -> bool {
     unsafe { *( (G_GAME_DATA + IS_REPLAY_OFFSET) as *const u8 ) != 0 }
 }
 
-/// Apply the anti-meta roll. `first` = the first window application: resources
-/// and the announce fire only then (later frames would overwrite mining
-/// income); the worker adjustment re-applies idempotently on every window
-/// frame so rollback re-simulations converge. The seed is cached per game:
-/// read fresh only on the first application, reused for every re-application
-/// — including a resimulation that re-enters frame 1 (the cache survives
-/// frame regress; it only resets on a new game).
-unsafe fn apply_roll(first: bool) {
-    let seed = if SEED_CACHE.load(Ordering::SeqCst) == 0 {
+/// Apply the anti-meta roll. Two distinct gates:
+///   * `first` (per GAME, survives rollback frame regress) gates the announce
+///     and the per-player log lines only — they must happen once per game;
+///   * `frame == 1` gates the resource overwrite: the write is a pure,
+///     idempotent overwrite of the rolled values, so it re-applies on EVERY
+///     execution of frame 1 — live or rollback re-simulation — which keeps a
+///     resim that re-enters frame 1 convergent with the live branch. Later
+///     window frames must NOT rewrite resources (the hook runs after
+///     StepObjects and would discard that frame's mining income).
+///
+/// The worker adjustment re-applies idempotently on every window frame. The
+/// seed is cached per game (SEED_READY flag — a legitimate seed of 0 must not
+/// re-trigger the accessor, which reads live RNG state): read fresh once per
+/// game, reused for every re-application, including a resimulation that
+/// re-enters frame 1.
+unsafe fn apply_roll(frame: u32, first: bool) {
+    let seed = if !SEED_READY.load(Ordering::SeqCst) {
         let api = crate::plus::api();
         let s = match (api.rng_seed)() {
             Some(f) => f(),
@@ -333,6 +343,7 @@ unsafe fn apply_roll(first: bool) {
             }
         };
         SEED_CACHE.store(s, Ordering::SeqCst);
+        SEED_READY.store(true, Ordering::SeqCst);
         s
     } else {
         SEED_CACHE.load(Ordering::SeqCst)
@@ -369,8 +380,10 @@ unsafe fn apply_roll(first: bool) {
         // Resources are a pure overwrite of the rolled values and apply to
         // EVERY active player — symmetric across teams even when a slot has
         // no racial worker or no completed town hall (teammates must not end
-        // up with different economies).
-        if first {
+        // up with different economies). Gated on frame == 1 (NOT on `first`):
+        // every execution of frame 1 — live or rollback re-simulation — must
+        // write the same values so a resim converges with the live branch.
+        if frame == 1 {
             set_resources(player as usize, roll.minerals, roll.gas);
         }
         // Race determines the worker id; a race with no worker (or no town

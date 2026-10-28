@@ -87,9 +87,13 @@ const GENERIC_ORDERS: &[u16] = &[
 const ALWAYS_CYCLE: &[u16] = &[103, 425]; // ZergLakizilisk, ZergLakiziliskZorthos
 
 /// Whether a command order byte is an ability-class order (a spell/morph/
-/// research/… — NOT a generic movement/harvest order and NOT a build/train
-/// command, which carries unit ids in the order slot). The tab cycle's
-/// subgroup-scoped execution narrows only these; everything else broadcasts.
+/// research/… — NOT a generic movement/harvest/construction order). Build
+/// and train commands are excluded three ways: card build buttons carry unit
+/// ids in the order slot (>= 499), the worker construction orders (0x19,
+/// 0x1A, 0x1E-0x21) are in GENERIC_ORDERS, and the command hook additionally
+/// broadcasts any command with a build/morph payload (see casting.rs). The
+/// tab cycle's subgroup-scoped execution narrows only ability-class orders;
+/// everything else broadcasts.
 pub(crate) fn is_ability_order(order: u8) -> bool {
     let o = order as u16;
     o != 0 && o < 499 && !GENERIC_ORDERS.contains(&o)

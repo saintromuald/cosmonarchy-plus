@@ -1067,17 +1067,20 @@ pub(crate) fn active_unit_id() -> u16 {
 ///   * the order is generic (move/attack/stop/harvest/build/train — those keep
 ///     broadcasting, exactly like SC2's plain orders);
 ///   * the selection is single-typed (the first worthy run IS the whole
-///     selection — narrowing would be a no-op);
-///   * no worthy run's card carries the order (broadcasting it is a no-op for
-///     every selected unit anyway).
+///     selection — narrowing would be a no-op).
 ///
 /// Otherwise the FIRST cycle-worthy canonical run whose card carries the
 /// order — the subgroup the player's Tab UI shows for it. Shared orders
-/// (burrow on zerglings AND lurkers) narrow to the first such run. Known,
-/// documented deviation: after Tab-ing to a LATER subgroup the narrowing
-/// still targets the first capability-bearing run (SC2 would target the
-/// tabbed subgroup, but that state is viewer-local and syncing it is a
-/// future netcode feature).
+/// (burrow on zerglings AND lurkers) narrow to the first such run. When NO
+/// worthy run's card carries the order, the run-filter falls back to the
+/// first worthy run: for card-carrying abilities that case cannot arise
+/// (any unit whose card carries an ability-class order is cycle-worthy), and
+/// the fallback keeps the ALWAYS_CYCLE units (lurkers, whose card has no
+/// manual burrow button) narrowing correctly — the conservative SC2-like
+/// default either way. Known, documented deviation: after Tab-ing to a LATER
+/// subgroup the narrowing still targets the first capability-bearing run
+/// (SC2 would target the tabbed subgroup, but that state is viewer-local and
+/// syncing it is a future netcode feature).
 pub(crate) unsafe fn narrow_targets(order: u8) -> Option<Vec<u32>> {
     if crate::config::env_flag("CM_PLUS_NO_TAB_CYCLE")
         || crate::config::env_flag("CM_PLUS_NO_TAB_NARROW")

@@ -89,7 +89,11 @@ unsafe extern "C" fn process_hook(
     arg2: u32,
     orig: unsafe extern "C" fn(*const core::ffi::c_void, u32, u32),
 ) {
-    if command.is_null() {
+    // An empty turn carries no commands: nothing to inspect or rewrite. The pointer may
+    // even be dangling (Rust's 0x1 for an empty Vec), so it must never be dereferenced —
+    // this check runs *before* any read of the command head. (The rollback client once
+    // passed an empty turn's dangling pointer here and faulted at address 1.)
+    if command.is_null() || arg1 == 0 {
         orig(command, arg1, arg2);
         return;
     }

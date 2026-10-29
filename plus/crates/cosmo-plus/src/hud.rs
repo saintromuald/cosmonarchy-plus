@@ -238,17 +238,13 @@ unsafe fn refresh_screen_scale(screen: bool) {
     SCREEN_SCALE.store(1000, Ordering::Relaxed);
 }
 
-/// Which layer the screen-corner overlays draw on this frame, per the
-/// EMPIRICALLY verified zoom behaviour of the release build:
-///   * 200% (the default and the zoom people actually play at): the chained
-///     engine screen-text call lands on the presented screen buffer —
-///     fixed position, fixed size (user-verified);
+/// Which layer the screen-corner overlays draw on this frame:
+///   * magnified (200%/300%): the re-chained DEFERRED screen-text pass —
+///     post resample, on the presented buffer, fixed position and size;
 ///   * 100%: the world surface IS the presented surface; the world pass at
-///     camera + (0,0) crop is exact;
-///   * any other zoom: the world pass with the live camera-relative crop
-///     (best effort).
+///     camera + (0,0) crop is exact.
 pub(crate) fn screen_layer_active() -> bool {
-    CHAIN.load(Ordering::SeqCst) != 0 && zoom_units() == 20000
+    CHAIN.load(Ordering::SeqCst) != 0 && zoom_units() != 10000
 }
 
 /// Install both hud mechanisms: the zoom statics resolution (per-frame crop
@@ -425,6 +421,125 @@ unsafe fn install_via_screen_text_call() {
          (chain 0x{chain:08X}, patch={r}); overlays draw with the message log"
     ));
     crate::state::hook("screen-text-call", SITE, chain as usize, my as usize);
+
+    // The chained function (the fork's draw_screen_text) DEFERS its own
+    // drawing while magnified — the live dump of the user's build shows
+    // `cmp dword [units],0x2710; jbe direct; mov byte [pending],1; ret`.
+    // The overlays therefore belong on the fork's DEFERRED pass (post
+    // resample, on the presented buffer). Derive the pending flag's live
+    // address from the chained function's own bytes, locate the deferred
+    // body (cmp/mov on the same flag), find its caller (thunk-aware) and
+    // re-chain there. Any failure keeps the exe-call chain (the text still
+    // survives via the partial-frame resampler's dirty-cell path).
+    if discover_deferred_pass(chain as usize) {
+        crate::log::log(
+            "[cosmo-plus] hud overlay: re-chained to the deferred screen-text pass \
+             (post-resample, presented buffer)",
+        );
+    }
+}
+
+/// From the chained draw_screen_text's live bytes, locate the deferred pass:
+/// the pending flag's address comes from the `mov byte [flag],1` right after
+/// the `cmp [units],0x2710; jbe` guard. The deferred function guards the
+/// flag: `cmp byte [flag],0; je; mov byte [flag],0; call draw_engine; ret`.
+/// Then find its single caller (following jmp thunks) and re-chain.
+unsafe fn discover_deferred_pass(chain_fn: usize) -> bool {
+    let b = |off: usize| std::ptr::read((chain_fn + off) as *const u8);
+    if b(0) != 0x81 || b(1) != 0x3D {
+        return false;
+    }
+    let units_imm = std::ptr::read((chain_fn + 2) as *const u32);
+    let cmp_val = std::ptr::read((chain_fn + 6) as *const u16);
+    if units_imm == 0 || cmp_val != 0x2710 {
+        return false;
+    }
+    // The `mov byte [flag],1` (C6 05 imm32 01) sits after the jbe rel32 (+8).
+    let mut flag = 0usize;
+    for off in 10..=16 {
+        if b(off) == 0xC6 && b(off + 1) == 0x05 {
+            flag = std::ptr::read((chain_fn + off + 2) as *const u32) as usize;
+            break;
+        }
+    }
+    if flag == 0 {
+        return false;
+    }
+    // Deferred body: cmp byte [flag],0; je ...; mov byte [flag],0 ...
+    let Some((base, size)) = crate::zoom::gptp_module() else {
+        return false;
+    };
+    let mut body: Option<usize> = None;
+    for i in 0..size.saturating_sub(24) {
+        let site = base + i;
+        if std::ptr::read(site as *const u8) != 0x80
+            || std::ptr::read((site + 1) as *const u8) != 0x3D
+        {
+            continue;
+        }
+        let imm = std::ptr::read((site + 2) as *const u32) as usize;
+        if imm != flag || std::ptr::read((site + 6) as *const u8) != 0x00 {
+            continue;
+        }
+        // je follows; then a C6 05 with the same imm within 24 bytes.
+        for off in 7..24 {
+            if std::ptr::read((site + off) as *const u8) == 0xC6
+                && std::ptr::read((site + off + 1) as *const u8) == 0x05
+                && std::ptr::read((site + off + 2) as *const u32) as usize == flag
+            {
+                body = Some(site);
+                break;
+            }
+        }
+        if body.is_some() {
+            break;
+        }
+    }
+    let Some(body) = body else {
+        return false;
+    };
+    // Caller: the E8 targeting the body (through a jmp thunk if needed).
+    let mut site: Option<usize> = None;
+    for i in 0..size.saturating_sub(5) {
+        let s = base + i;
+        if std::ptr::read(s as *const u8) != 0xE8 {
+            continue;
+        }
+        let rel = std::ptr::read((s + 1) as *const i32) as i64;
+        let t = s as i64 + 5 + rel;
+        if t == body as i64 {
+            site = Some(s);
+            break;
+        }
+        if t > 0 && t < (base + size) as i64 && std::ptr::read(t as *const u8) == 0xE9 {
+            let jrel = std::ptr::read((t as usize + 1) as *const i32) as i64;
+            if t + 5 + jrel == body as i64 {
+                site = Some(s);
+                break;
+            }
+        }
+    }
+    let Some(site) = site else {
+        return false;
+    };
+    CHAIN.store(body as u32, Ordering::SeqCst);
+    let my = wrapper as *const () as usize as u32;
+    let new_rel = my.wrapping_sub(site as u32 + 5) as i32;
+    let patch: [u8; 5] = [
+        0xE8,
+        new_rel as u8,
+        (new_rel >> 8) as u8,
+        (new_rel >> 16) as u8,
+        (new_rel >> 24) as u8,
+    ];
+    let api = crate::plus::api();
+    let r = (api.write_exe_memory)(site, patch.as_ptr(), patch.len());
+    crate::log::log(&format!(
+        "[cosmo-plus] hud overlay: deferred pass @ 0x{site:08X} (body 0x{body:08X}, \
+         flag 0x{flag:08X}, patch={r})"
+    ));
+    crate::state::hook("deferred-screen-text", site, body as usize, my as usize);
+    true
 }
 
 /// Replaces the original callee: chain it first (it draws the fork's message

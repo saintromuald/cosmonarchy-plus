@@ -445,14 +445,22 @@ unsafe fn install_via_screen_text_call() {
 /// flag: `cmp byte [flag],0; je; mov byte [flag],0; call draw_engine; ret`.
 /// Then find its single caller (following jmp thunks) and re-chain.
 unsafe fn discover_deferred_pass(chain_fn: usize) -> bool {
+    let fail = |step: &str| {
+        crate::log::log(&format!(
+            "[cosmo-plus] hud overlay: deferred rediscovery failed at {step}"
+        ));
+        false
+    };
     let b = |off: usize| std::ptr::read((chain_fn + off) as *const u8);
     if b(0) != 0x81 || b(1) != 0x3D {
-        return false;
+        return fail("signature (chain fn is not `cmp dword [units],...`)");
     }
     let units_imm = std::ptr::read((chain_fn + 2) as *const u32);
     let cmp_val = std::ptr::read((chain_fn + 6) as *const u16);
     if units_imm == 0 || cmp_val != 0x2710 {
-        return false;
+        return fail(&format!(
+            "units/cmp check (units_imm 0x{units_imm:08X}, cmp 0x{cmp_val:04X})"
+        ));
     }
     // The `mov byte [flag],1` (C6 05 imm32 01) sits after the jbe rel32 (+8).
     let mut flag = 0usize;
@@ -463,11 +471,14 @@ unsafe fn discover_deferred_pass(chain_fn: usize) -> bool {
         }
     }
     if flag == 0 {
-        return false;
+        return fail("pending-flag locator (no C6 05 after the jbe)");
     }
+    crate::log::log(&format!(
+        "[cosmo-plus] hud overlay: deferred rediscovery: pending flag 0x{flag:08X}"
+    ));
     // Deferred body: cmp byte [flag],0; je ...; mov byte [flag],0 ...
     let Some((base, size)) = crate::zoom::gptp_module() else {
-        return false;
+        return fail("gptp module lookup");
     };
     let mut body: Option<usize> = None;
     for i in 0..size.saturating_sub(24) {
@@ -496,8 +507,11 @@ unsafe fn discover_deferred_pass(chain_fn: usize) -> bool {
         }
     }
     let Some(body) = body else {
-        return false;
+        return fail("deferred body scan (guard on the pending flag not found)");
     };
+    crate::log::log(&format!(
+        "[cosmo-plus] hud overlay: deferred rediscovery: body 0x{body:08X}"
+    ));
     // Caller: the E8 targeting the body (through a jmp thunk if needed).
     let mut site: Option<usize> = None;
     for i in 0..size.saturating_sub(5) {
@@ -520,7 +534,7 @@ unsafe fn discover_deferred_pass(chain_fn: usize) -> bool {
         }
     }
     let Some(site) = site else {
-        return false;
+        return fail("caller scan (no call targets the body)");
     };
     CHAIN.store(body as u32, Ordering::SeqCst);
     let my = wrapper as *const () as usize as u32;

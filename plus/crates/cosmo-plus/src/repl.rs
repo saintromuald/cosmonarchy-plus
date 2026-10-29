@@ -75,6 +75,19 @@ unsafe fn exec(line: &str) {
     let mut parts = line.split_whitespace();
     let cmd = parts.next().unwrap_or("");
     match cmd {
+        "zoom" => {
+            let (cx, cy) = crate::overlay::camera();
+            reply(&format!(
+                "zoom units={} crop=({},{},{},{}) screen_layer={} scale={:.2} camera=({cx},{cy})",
+                crate::hud::zoom_units(),
+                crate::hud::crop_left(),
+                crate::hud::crop_top(),
+                crate::hud::crop_w(),
+                crate::hud::crop_h(),
+                crate::hud::screen_layer_active(),
+                crate::hud::screen_scale(),
+            ));
+        }
         "mem" => {
             // mem <hex-address> <count> — hex-dump live memory to the log.
             let addr = parts.next().and_then(|s| usize::from_str_radix(s.trim_start_matches("0x"), 16).ok());

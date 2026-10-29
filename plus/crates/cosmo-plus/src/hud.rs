@@ -148,6 +148,12 @@ pub(crate) unsafe fn refresh() {
     refresh_zoom_view(0, 0);
 }
 
+/// The current crop fields (world px, camera-relative).
+pub(crate) fn crop_left() -> i32 { CROP_LEFT.load(Ordering::Relaxed) as i32 }
+pub(crate) fn crop_top() -> i32 { CROP_TOP.load(Ordering::Relaxed) as i32 }
+pub(crate) fn crop_w() -> i32 { CROP_W.load(Ordering::Relaxed) as i32 }
+pub(crate) fn crop_h() -> i32 { CROP_H.load(Ordering::Relaxed) as i32 }
+
 /// The current crop offset relative to the camera (world px).
 pub(crate) fn crop_offset() -> (i32, i32) {
     (
@@ -428,6 +434,22 @@ unsafe extern "C" fn wrapper() {
         );
     }
     draw_screen_overlays((0, 0));
+    static CALLS: AtomicU32 = AtomicU32::new(0);
+    let n = CALLS.fetch_add(1, Ordering::Relaxed);
+    if n < 3 {
+        let surf = std::ptr::read(0x006C_F4A8 as *const usize);
+        crate::log::log(&format!(
+            "[cosmo-plus] hud wrapper: frame={} surface=0x{surf:08X} units={} scale={:.2} \
+             crop=({},{},{},{})",
+            crate::frame::frame_count_safe(),
+            zoom_units(),
+            screen_scale(),
+            crop_left(),
+            crop_top(),
+            crop_w(),
+            crop_h(),
+        ));
+    }
 }
 
 /// Draw every screen-corner overlay at the given origin. On the deferred

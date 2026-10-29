@@ -806,9 +806,21 @@ pub(crate) unsafe fn poll() {
     let (active_key, groups) = match action {
         SubgroupAction::Inert => {
             if crate::config::env_flag("CM_PLUS_TAB_DEBUG") {
-                crate::log::log(
-                    "[cosmo-plus] tab cycle debug: no worthy subgroups (abilities only), Tab inert",
-                );
+                // The raw selection is what the classification saw: log it so
+                // a permanently-inert Tab can be told apart from a genuinely
+                // ability-less selection.
+                let raw = read_canonical_selection()
+                    .map(|(ids, _)| {
+                        ids.iter()
+                            .map(|&d| format!("{}{}", base_id(d),
+                                if crate::abilities::cycle_worthy(base_id(d)) { "+" } else { "-" }))
+                            .collect::<Vec<_>>()
+                            .join(",")
+                    })
+                    .unwrap_or_else(|| "<none>".to_string());
+                crate::log::log(&format!(
+                    "[cosmo-plus] tab cycle debug: no worthy subgroups, Tab inert; selection [{raw}] (+ = ability-bearing)"
+                ));
             }
             return;
         }

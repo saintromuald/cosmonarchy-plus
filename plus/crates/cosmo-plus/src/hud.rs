@@ -281,18 +281,32 @@ unsafe fn install_deferred_site() {
             }
             let rel = std::ptr::read((base + i + 1) as *const i32) as i64;
             let target = i as i64 + 5 + rel;
-            if target >= 0 && target < size as i64 && target == body_rva as i64 {
-                count += 1;
-                if site.is_none() {
-                    site = Some(i);
+            if target >= 0 && target < size as i64 {
+                if target == body_rva as i64 {
+                    count += 1;
+                    if site.is_none() {
+                        site = Some(i);
+                    }
+                } else if std::ptr::read((base + target as usize) as *const u8) == 0xE9 {
+                    // Incremental-link jmp thunk: the call targets a 5-byte
+                    // jump into the real body.
+                    let jrel = std::ptr::read((base + target as usize + 1) as *const i32) as i64;
+                    let ultimate = target + 5 + jrel;
+                    if ultimate >= 0 && ultimate < size as i64 && ultimate == body_rva as i64 {
+                        count += 1;
+                        if site.is_none() {
+                            site = Some(i);
+                        }
+                    }
                 }
             }
         }
         let Some(site_rva) = site else {
             crate::log::log(
                 "[cosmo-plus] hud overlay: no caller of draw_deferred_screen_text found; \
-                 falling back to the world pass",
+                 trying the engine's screen-text call site",
             );
+            install_via_screen_text_call();
             return;
         };
         if count > 1 {

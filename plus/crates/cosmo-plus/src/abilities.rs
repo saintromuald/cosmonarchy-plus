@@ -22,6 +22,13 @@ use once_cell::sync::Lazy;
 /// `g_buttonset_table` (ButtonSet** at 0x005187E8; the extender resolves it).
 const G_BUTTONSET_TABLE: usize = 0x0051_87E8;
 
+/// The live address of the GLOBAL THAT POINTS AT the table (0 = unresolved).
+/// On the widescreen release build the vanilla global at 0x005187E8 holds
+/// garbage (observed: 0x6), so the table is located by scanning the fork's
+/// live `update_current_buttonset` reimplementation for table-pointer loads
+/// and validating each candidate as a ButtonSet array.
+static TABLE_GLOBAL_ADDR: AtomicUsize = AtomicUsize::new(0);
+
 /// `mpq/arr/units.txt` names (id = line index), loaded once for the dump.
 static UNIT_NAMES: Lazy<Vec<String>> = Lazy::new(crate::data::load_unit_names);
 
@@ -51,6 +58,100 @@ struct ButtonSet {
 const SCAN_UNITS: usize = 800;
 /// Sanity cap on a buttonset's button count.
 const MAX_BUTTONS: u32 = 32;
+
+use std::sync::atomic::AtomicUsize;
+
+/// Whether `ptr` plausibly points at the ButtonSet array: several known unit
+/// ids must resolve to readable ButtonSets with sane button counts.
+unsafe fn table_plausible(table: *const ButtonSet) -> bool {
+    if table.is_null() || !crate::overlay::readable_ptr(table as *const u8, 4) {
+        return false;
+    }
+    let mut ok = 0;
+    for &id in &[7u16, 41, 64, 106, 131] {
+        let bs = table.add(id as usize);
+        if !crate::overlay::readable_ptr(bs as *const u8, core::mem::size_of::<ButtonSet>()) {
+            continue;
+        }
+        let count = (*bs).buttons_in_set;
+        if count == 0 || count > MAX_BUTTONS {
+            continue;
+        }
+        let first = (*bs).first_button;
+        if first.is_null()
+            || !crate::overlay::readable_ptr(first as *const u8, core::mem::size_of::<Button>())
+        {
+            continue;
+        }
+        ok += 1;
+    }
+    ok >= 3
+}
+
+/// Resolve the live buttonset table pointer: validate the vanilla exe global
+/// first, then scan the fork's live `update_current_buttonset` (the E9 target
+/// at 0x004599A0) for absolute table-pointer loads and validate each
+/// candidate. Returns the pointer to the TABLE (not the global).
+unsafe fn resolve_table() -> *const ButtonSet {
+    let cached = TABLE_GLOBAL_ADDR.load(Ordering::SeqCst);
+    if cached != 0 {
+        return std::ptr::read(cached as *const *const ButtonSet);
+    }
+    // 1. The vanilla global.
+    let vanilla = std::ptr::read(G_BUTTONSET_TABLE as *const *const ButtonSet);
+    if table_plausible(vanilla) {
+        TABLE_GLOBAL_ADDR.store(G_BUTTONSET_TABLE, Ordering::SeqCst);
+        crate::log::log(&format!(
+            "[cosmo-plus] abilities: buttonset table @ 0x{vanilla:08X} (vanilla global 0x{G_BUTTONSET_TABLE:08X})"
+        ));
+        return vanilla;
+    }
+    // 2. Scan the fork's live card updater for `A1 imm32` / `8B ?? imm32`
+    //    loads whose pointed-to value is a plausible table.
+    const UPDATER: usize = 0x004599A0;
+    let first = std::ptr::read(UPDATER as *const u8);
+    if first == 0xE9 {
+        let rel = std::ptr::read((UPDATER + 1) as *const i32);
+        let fns = UPDATER.wrapping_add(5).wrapping_add(rel as usize);
+        for off in 0..2048usize {
+            let site = fns + off;
+            let b = std::ptr::read(site as *const u8);
+            let (imm, len) = match b {
+                0xA1 => (std::ptr::read((site + 1) as *const u32) as usize, 5),
+                0x8B => {
+                    let b2 = std::ptr::read((site + 1) as *const u8);
+                    if (0x05..=0x3D).contains(&b2) && b2 % 8 == 5 {
+                        (std::ptr::read((site + 2) as *const u32) as usize, 6)
+                    } else {
+                        continue;
+                    }
+                }
+                _ => continue,
+            };
+            let _ = len;
+            if !crate::overlay::readable_ptr(imm as *const u8, 4) {
+                continue;
+            }
+            let table = std::ptr::read(imm as *const *const ButtonSet);
+            if table_plausible(table) {
+                TABLE_GLOBAL_ADDR.store(imm, Ordering::SeqCst);
+                crate::log::log(&format!(
+                    "[cosmo-plus] abilities: buttonset table @ 0x{table:08X} (global 0x{imm:08X} \
+                     found in the fork's card updater @ 0x{fns:08X}+0x{off:X})"
+                ));
+                return table;
+            }
+        }
+    }
+    static LOGGED: AtomicBool = AtomicBool::new(false);
+    if !LOGGED.swap(true, Ordering::SeqCst) {
+        crate::log::log(&format!(
+            "[cosmo-plus] abilities: buttonset table UNRESOLVED (vanilla global holds 0x{vanilla:08X}); \
+             the Tab cycle cannot classify abilities and stays inert"
+        ));
+    }
+    std::ptr::null()
+}
 
 /// Orders that are NOT abilities (Cosmonarchy's orders.txt ids): movement,
 /// attack/stop/patrol/hold/watch, worker gather/repair/build context,
@@ -105,8 +206,8 @@ pub(crate) fn is_ability_order(order: u8) -> bool {
 /// the buttonset table is identical on every peer. `false` while the table is
 /// unresolved.
 pub(crate) unsafe fn has_order(unit_id: u16, order: u8) -> bool {
-    let table = std::ptr::read(G_BUTTONSET_TABLE as *const *const ButtonSet);
-    if table.is_null() || !crate::overlay::readable_ptr(table as *const u8, 4) {
+    let table = resolve_table();
+    if table.is_null() {
         return false;
     }
     let bs = table.add(unit_id as usize);
@@ -163,8 +264,8 @@ pub(crate) unsafe fn cycle_worthy(unit_id: u16) -> bool {
 /// Read the unit's buttonset and look for a non-generic order button.
 /// `None` = the buttonset table is not resolved yet.
 unsafe fn classify(unit_id: u16) -> Option<bool> {
-    let table = std::ptr::read(G_BUTTONSET_TABLE as *const *const ButtonSet);
-    if table.is_null() || !crate::overlay::readable_ptr(table as *const u8, 4) {
+    let table = resolve_table();
+    if table.is_null() {
         return None;
     }
     let bs = table.add(unit_id as usize);
@@ -199,8 +300,8 @@ pub(crate) unsafe fn dump_once() {
     if !crate::config::env_flag("CM_PLUS_DUMP_ABILITIES") || DONE.load(Ordering::SeqCst) {
         return;
     }
-    let table = std::ptr::read(G_BUTTONSET_TABLE as *const *const ButtonSet);
-    if table.is_null() || !crate::overlay::readable_ptr(table as *const u8, 4) {
+    let table = resolve_table();
+    if table.is_null() {
         return; // not resolved yet; retry next frame
     }
     DONE.store(true, Ordering::SeqCst);
@@ -213,8 +314,8 @@ pub(crate) unsafe fn dump_on_menu_key() {
     if !crate::config::env_flag("CM_PLUS_DUMP_ABILITIES") || DONE.load(Ordering::SeqCst) {
         return;
     }
-    let table = std::ptr::read(G_BUTTONSET_TABLE as *const *const ButtonSet);
-    if table.is_null() || !crate::overlay::readable_ptr(table as *const u8, 4) {
+    let table = resolve_table();
+    if table.is_null() {
         return; // not resolved yet; retry on the next key press
     }
     DONE.store(true, Ordering::SeqCst);

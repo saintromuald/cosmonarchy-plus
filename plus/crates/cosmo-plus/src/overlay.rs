@@ -407,17 +407,24 @@ pub(crate) unsafe fn draw_idle_counter(origin: (i32, i32)) {
     });
 
     // SC2's lower-left corner: above the minimap panel (the corner itself is
-    // the unit panel). On the screen layer the origin is (0,0) and these are
-    // plain screen pixels; on the world fallback the origin is view_origin().
+    // the unit panel). Authored in the 640x480 space, scaled to the current
+    // layer (the widescreen screen buffer is ~2x).
+    let sc = crate::hud::screen_scale();
     let (ox, oy) = crate::repl::badge_pin().unwrap_or((8, 340));
-    let tx = origin.0 + ox;
-    let ty = origin.1 + oy;
+    let tx = origin.0 + (ox as f32 * sc) as i32;
+    let ty = origin.1 + (oy as f32 * sc) as i32;
 
     // The race's greyed worker at 0 (SC2 shows the worker button greyed), the
     // first idle worker's icon otherwise.
     let race = player_race(local as u8);
     let icon_id = icon.unwrap_or_else(|| tier1_worker_icon(race));
-    crate::icon::draw_unit_icon_scaled(icon_id, tx, ty, 24, 22);
+    crate::icon::draw_unit_icon_scaled(
+        icon_id,
+        tx,
+        ty,
+        (24.0 * sc) as i32,
+        (22.0 * sc) as i32,
+    );
 
     set_font_handle(font);
     write_draw_text(0, 0, 0x7FFF, 0x7FFF);
@@ -429,7 +436,7 @@ pub(crate) unsafe fn draw_idle_counter(origin: (i32, i32)) {
     let label = format!("Idle Workers: {n}");
     let len = label.len().min(buf.len() - 1);
     buf[..len].copy_from_slice(&label.as_bytes()[..len]);
-    let text_x = tx + 28;
+    let text_x = tx + (28.0 * sc) as i32;
     get_color_handle(text_color::BLACK);
     bw_print_xy(buf.as_ptr(), text_x + 1, ty + 1);
     get_color_handle(if n > 0 { text_color::YELLOW } else { text_color::GREY2 });
@@ -489,7 +496,12 @@ pub(crate) unsafe fn draw_tab_indicator(origin: (i32, i32)) {
         format!("Tab {active}/{total} \u{b7} {short}")
     };
     let _ = write!(&mut buf[..], "{label}");
-    bw_print_xy(buf.as_ptr(), origin.0 + 320, origin.1 + 28);
+    let sc = crate::hud::screen_scale();
+    bw_print_xy(
+        buf.as_ptr(),
+        origin.0 + (320.0 * sc) as i32,
+        origin.1 + (28.0 * sc) as i32,
+    );
     set_font_handle(core::ptr::null_mut());
 }
 
@@ -553,7 +565,12 @@ pub(crate) unsafe fn draw_capture_confirmation(origin: (i32, i32)) {
     let mut buf = [0u8; 32];
     buf.fill(0);
     let _ = write!(&mut buf[..], "BUG SAVED f{}", last);
-    bw_print_xy(buf.as_ptr(), origin.0 + 60, origin.1 + 264);
+    let sc = crate::hud::screen_scale();
+    bw_print_xy(
+        buf.as_ptr(),
+        origin.0 + (60.0 * sc) as i32,
+        origin.1 + (264.0 * sc) as i32,
+    );
     set_font_handle(core::ptr::null_mut());
 }
 
@@ -913,19 +930,22 @@ pub(crate) unsafe fn draw_changes(origin: (i32, i32)) {
     write_draw_text(0, 0, 0x7FFF, 0x7FFF);
     *(G_PRINT_XY_ALIGNMENT as *mut u8) = 0x11;
 
+    let sc = crate::hud::screen_scale();
+    let px = |x: i32| origin.0 + (x as f32 * sc) as i32;
+    let py = |y: i32| origin.1 + (y as f32 * sc) as i32;
     if visible {
         get_color_handle(text_color::YELLOW);
         let title = padded("COSMONARCHY PLUS - CHANGES VS OG (Pause/Break closes)");
-        bw_print_xy(title.as_ptr(), origin.0 + 60, origin.1 + 24);
+        bw_print_xy(title.as_ptr(), px(60), py(24));
         get_color_handle(text_color::WHITE);
         for (i, line) in CHANGES_LINES.iter().enumerate() {
             let buf = padded(line);
-            bw_print_xy(buf.as_ptr(), origin.0 + 70, origin.1 + 48 + i as i32 * 14);
+            bw_print_xy(buf.as_ptr(), px(70), py(48 + i as i32 * 14));
         }
     } else {
         get_color_handle(text_color::YELLOW);
         let buf = padded("Cosmonarchy Plus: Pause/Break shows changes vs OG");
-        bw_print_xy(buf.as_ptr(), origin.0 + 60, origin.1 + 24);
+        bw_print_xy(buf.as_ptr(), px(60), py(24));
     }
     set_font_handle(core::ptr::null_mut());
 }
@@ -1166,12 +1186,15 @@ pub(crate) unsafe fn selftest_menu() {
 /// Read-only: called from the draw pass, so per-client differences are safe.
 pub(crate) unsafe fn draw_text_lines(origin: (i32, i32), title: &str, lines: &[String]) {
     get_color_handle(4); // white
+    let sc = crate::hud::screen_scale();
+    let px = |x: i32| origin.0 + (x as f32 * sc) as i32;
+    let py = |y: i32| origin.1 + (y as f32 * sc) as i32;
 
     let title_buf = padded(title);
-    bw_print_xy(title_buf.as_ptr(), origin.0 + 60, origin.1 + 24);
+    bw_print_xy(title_buf.as_ptr(), px(60), py(24));
     for (i, line) in lines.iter().enumerate() {
         let buf = padded(line);
-        bw_print_xy(buf.as_ptr(), origin.0 + 70, origin.1 + 48 + i as i32 * 14);
+        bw_print_xy(buf.as_ptr(), px(70), py(48 + i as i32 * 14));
     }
 }
 

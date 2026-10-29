@@ -197,6 +197,36 @@ pub(crate) fn status() -> String {
     }
 }
 
+/// The overlay position scale for the CURRENT layer: on the screen layer the
+/// surface is the presentation buffer (~2x the 640x480-authored space on the
+/// widescreen build — the live minimap rect is ~2x the authored 127px), so
+/// all authored positions multiply by this. The world pass is 1:1.
+static SCREEN_SCALE: AtomicU32 = AtomicU32::new(1000);
+
+/// The overlay position scale (1.0 on the world pass; ~2.0 on the screen
+/// layer of the widescreen build).
+pub(crate) fn screen_scale() -> f32 {
+    (SCREEN_SCALE.load(Ordering::Relaxed) as f32) / 1000.0
+}
+
+unsafe fn refresh_screen_scale(screen: bool) {
+    if !screen {
+        SCREEN_SCALE.store(1000, Ordering::Relaxed);
+        return;
+    }
+    if let Some(rect) = crate::state::minimap_rect() {
+        let w = rect[2] - rect[0];
+        if (40..=640).contains(&w) {
+            // Authored minimap width is 127; anything wider means the
+            // presentation is scaled up.
+            let scale = (w as f32 / 127.0).clamp(1.0, 4.0);
+            SCREEN_SCALE.store((scale * 1000.0) as u32, Ordering::Relaxed);
+            return;
+        }
+    }
+    SCREEN_SCALE.store(1000, Ordering::Relaxed);
+}
+
 /// Whether the screen-corner overlays draw on the deferred screen layer this
 /// frame: the hook is armed AND the view is magnified (the fork skips the
 /// call site at 100%, where the world pass draws instead).
@@ -407,6 +437,7 @@ pub(crate) unsafe fn draw_screen_overlays(origin: (i32, i32)) {
     }
     let mut buf = [0u8; 16];
     let screen = origin == (0, 0);
+    refresh_screen_scale(screen);
     // Minimap-position labels first (they sit on the map panel).
     crate::nydus::draw_minimap(&mut buf, screen);
     crate::cam_labels::draw_minimap(&mut buf, screen);
@@ -445,7 +476,12 @@ unsafe fn draw_build_rev(origin: (i32, i32)) {
     let label = format!("build {}", &rev[..rev.len().min(7)]);
     let len = label.len().min(buf.len() - 1);
     buf[..len].copy_from_slice(&label.as_bytes()[..len]);
-    crate::overlay::bw_print_xy(buf.as_ptr(), origin.0 + 8, origin.1 + 320);
+    let sc = screen_scale();
+    crate::overlay::bw_print_xy(
+        buf.as_ptr(),
+        origin.0 + (8.0 * sc) as i32,
+        origin.1 + (320.0 * sc) as i32,
+    );
     crate::overlay::set_font_handle(core::ptr::null_mut());
 }
 

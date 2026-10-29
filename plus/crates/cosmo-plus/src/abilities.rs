@@ -28,6 +28,9 @@ const G_BUTTONSET_TABLE: usize = 0x0051_87E8;
 /// live `update_current_buttonset` reimplementation for table-pointer loads
 /// and validating each candidate as a ButtonSet array.
 static TABLE_GLOBAL_ADDR: AtomicUsize = AtomicUsize::new(0);
+/// The resolved table representation: 0 = pointer array; 12/16/20/24 = a
+/// value array of ButtonSet structs with that stride.
+static TABLE_STRIDE: AtomicUsize = AtomicUsize::new(0);
 
 /// `mpq/arr/units.txt` names (id = line index), loaded once for the dump.
 static UNIT_NAMES: Lazy<Vec<String>> = Lazy::new(crate::data::load_unit_names);
@@ -92,6 +95,95 @@ unsafe fn table_plausible(table: *const ButtonSet) -> bool {
 /// first, then scan the fork's live `update_current_buttonset` (the E9 target
 /// at 0x004599A0) for absolute table-pointer loads and validate each
 /// candidate. Returns the pointer to the TABLE (not the global).
+/// Sweep a memory range for the buttonset table. Returns (array base, stride)
+/// where stride 0 = pointer array, stride > 0 = value array of ButtonSets.
+unsafe fn sweep_for_table(base: usize, size: usize) -> Option<(usize, usize)> {
+    const IDS: &[u16] = &[7, 41, 63, 64, 106, 131, 314];
+    const STRIDES: &[usize] = &[12, 16, 20, 24];
+    let mut candidates: Vec<(usize, usize)> = Vec::new();
+    let step = 4usize;
+    let mut cell = base;
+    let mut cells = 0u32;
+    while cell + 4 <= base + size && cells < 3_000_000 {
+        cells += 1;
+        // (a) the cell's value is the array base.
+        let arr = std::ptr::read(cell as *const usize);
+        if arr != 0 && (arr as usize) % 4 == 0 {
+            // pointer array: validate the range once, then raw-read.
+            if crate::overlay::readable_ptr(arr as *const u8, 800 * 4) {
+                let mut ok = 0;
+                for &id in IDS {
+                    let p = std::ptr::read((arr + id as usize * 4) as *const usize);
+                    if p == 0 || !crate::overlay::readable_ptr(p as *const u8, 8) {
+                        continue;
+                    }
+                    let count = std::ptr::read(p as *const u32);
+                    if (1..=64).contains(&count) {
+                        ok += 1;
+                    }
+                }
+                if ok >= 4 {
+                    return Some((arr, 0));
+                }
+                candidates.push((arr, 0));
+            }
+            // value array: each id at arr + id*stride.
+            for &st in STRIDES {
+                let need = IDS[IDS.len() - 1] as usize * st + 8;
+                if !crate::overlay::readable_ptr(arr as *const u8, need) {
+                    continue;
+                }
+                let mut ok = 0;
+                for &id in IDS {
+                    let off = id as usize * st;
+                    let count = std::ptr::read((arr + off) as *const u32);
+                    if (1..=64).contains(&count) {
+                        ok += 1;
+                    }
+                }
+                if ok >= 4 {
+                    return Some((arr, st));
+                }
+            }
+        }
+        // (b) the cell itself is a pointer-array base.
+        if crate::overlay::readable_ptr(cell as *const u8, 800 * 4) {
+            let mut ok = 0;
+            for &id in IDS {
+                let p = std::ptr::read((cell + id as usize * 4) as *const usize);
+                if p == 0 || !crate::overlay::readable_ptr(p as *const u8, 8) {
+                    continue;
+                }
+                let count = std::ptr::read(p as *const u32);
+                if (1..=64).contains(&count) {
+                    ok += 1;
+                }
+            }
+            if ok >= 4 {
+                return Some((cell, 0));
+            }
+        }
+        cell += step;
+    }
+    let _ = candidates;
+    None
+}
+
+/// The ButtonSet for a unit id, from the resolved table (either layout).
+unsafe fn buttonset_for(unit_id: u16) -> *const ButtonSet {
+    let base = TABLE_GLOBAL_ADDR.load(Ordering::SeqCst);
+    if base == 0 {
+        return std::ptr::null();
+    }
+    let stride = TABLE_STRIDE.load(Ordering::SeqCst);
+    if stride == 0 {
+        let p = std::ptr::read((base + unit_id as usize * 4) as *const *const ButtonSet);
+        p
+    } else {
+        (base + unit_id as usize * stride) as *const ButtonSet
+    }
+}
+
 unsafe fn resolve_table() -> *const ButtonSet {
     let cached = TABLE_GLOBAL_ADDR.load(Ordering::SeqCst);
     if cached != 0 {
@@ -107,7 +199,25 @@ unsafe fn resolve_table() -> *const ButtonSet {
         ));
         return vanilla;
     }
-    // 2. Scan the fork's live card updater for `A1 imm32` / `8B ?? imm32`
+    // 2. Brute-force sweep: the table (pointer array or value array) lives in
+    //    writable memory — gptp's own .data/.bss or a heap block referenced
+    //    from it. For every 4-byte cell, (a) treat the cell's value as the
+    //    array base, (b) treat the cell itself as the array base; validate a
+    //    few known unit ids for each layout.
+    if let Some(base) = crate::zoom::gptp_module() {
+        if let Some(t) = sweep_for_table(base.0, base.1) {
+            TABLE_GLOBAL_ADDR.store(t.0, Ordering::SeqCst);
+            TABLE_STRIDE.store(t.1, Ordering::SeqCst);
+            crate::log::log(&format!(
+                "[cosmo-plus] abilities: buttonset table @ 0x{:08X} ({} stride {}) via memory sweep",
+                t.0,
+                if t.1 == 0 { "pointer array" } else { "value array" },
+                t.1,
+            ));
+            return std::ptr::read(t.0 as *const *const ButtonSet);
+        }
+    }
+    // 3. Scan the fork's live card updater for `A1 imm32` / `8B ?? imm32`
     //    loads whose pointed-to value is a plausible table.
     const UPDATER: usize = 0x004599A0;
     let first = std::ptr::read(UPDATER as *const u8);
@@ -209,12 +319,11 @@ pub(crate) fn is_ability_order(order: u8) -> bool {
 /// the buttonset table is identical on every peer. `false` while the table is
 /// unresolved.
 pub(crate) unsafe fn has_order(unit_id: u16, order: u8) -> bool {
-    let table = resolve_table();
-    if table.is_null() {
+    if resolve_table().is_null() {
         return false;
     }
-    let bs = table.add(unit_id as usize);
-    if !crate::overlay::readable_ptr(bs as *const u8, core::mem::size_of::<ButtonSet>()) {
+    let bs = buttonset_for(unit_id);
+    if bs.is_null() || !crate::overlay::readable_ptr(bs as *const u8, core::mem::size_of::<ButtonSet>()) {
         return false;
     }
     let count = (*bs).buttons_in_set.min(MAX_BUTTONS);
@@ -267,12 +376,11 @@ pub(crate) unsafe fn cycle_worthy(unit_id: u16) -> bool {
 /// Read the unit's buttonset and look for a non-generic order button.
 /// `None` = the buttonset table is not resolved yet.
 unsafe fn classify(unit_id: u16) -> Option<bool> {
-    let table = resolve_table();
-    if table.is_null() {
+    if resolve_table().is_null() {
         return None;
     }
-    let bs = table.add(unit_id as usize);
-    if !crate::overlay::readable_ptr(bs as *const u8, core::mem::size_of::<ButtonSet>()) {
+    let bs = buttonset_for(unit_id);
+    if bs.is_null() || !crate::overlay::readable_ptr(bs as *const u8, core::mem::size_of::<ButtonSet>()) {
         return None;
     }
     let count = (*bs).buttons_in_set.min(MAX_BUTTONS);
@@ -330,8 +438,8 @@ unsafe fn dump_table(table: *const ButtonSet) {
     crate::log::log("[cosmo-plus] abilities dump: start");
     let mut logged = 0u32;
     for unit_id in 0..SCAN_UNITS {
-        let bs = table.add(unit_id);
-        if !crate::overlay::readable_ptr(bs as *const u8, core::mem::size_of::<ButtonSet>()) {
+        let bs = buttonset_for(unit_id as u16);
+        if bs.is_null() || !crate::overlay::readable_ptr(bs as *const u8, core::mem::size_of::<ButtonSet>()) {
             break;
         }
         let count = (*bs).buttons_in_set.min(MAX_BUTTONS);

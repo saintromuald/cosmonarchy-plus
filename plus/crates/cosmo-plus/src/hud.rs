@@ -227,11 +227,13 @@ unsafe fn refresh_screen_scale(screen: bool) {
     SCREEN_SCALE.store(1000, Ordering::Relaxed);
 }
 
-/// Whether the screen-corner overlays draw on the deferred screen layer this
-/// frame: the hook is armed AND the view is magnified (the fork skips the
-/// call site at 100%, where the world pass draws instead).
+/// Whether the screen-corner overlays draw on the engine's screen-text layer
+/// this frame: the hook is armed (the chained call runs EVERY frame at every
+/// zoom, and live testing showed the overlays drawn there survive at 200% —
+/// the fork's draw order makes that the presented surface). The world pass
+/// is only the fallback for builds where the chain cannot be installed.
 pub(crate) fn screen_layer_active() -> bool {
-    CHAIN.load(Ordering::SeqCst) != 0 && UNITS.load(Ordering::Relaxed) != 10000
+    CHAIN.load(Ordering::SeqCst) != 0
 }
 
 /// Install both hud mechanisms: the zoom statics resolution (per-frame crop

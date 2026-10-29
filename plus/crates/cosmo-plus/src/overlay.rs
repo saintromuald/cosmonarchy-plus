@@ -306,20 +306,26 @@ unsafe extern "stdcall" fn draw_hook(surface: *mut core::ffi::c_void, bounds: *m
             core::mem::transmute(old);
         old(surface, bounds);
     }
-    // Refresh the per-frame zoom view FIRST: every screen-corner overlay this
-    // frame (larva entry, queue, changes panel, idle counter, Tab indicator)
-    // anchors at view_origin() = camera + crop offset, and the crop can change
-    // between frames (wheel zoom). One consistent read per frame.
+    // Refresh the per-frame zoom view FIRST (the crop and magnified state can
+    // change between frames).
     crate::hud::refresh();
+    // The screen-corner overlays draw on ONE of two layers:
+    //   * the deferred screen-text layer (after the zoom resample, on the
+    //     presented screen buffer) when the hook is armed AND the view is
+    //     magnified — plain screen pixels, zoom-independent, exactly SC2;
+    //   * the world pass (here) when not magnified or when the hook is
+    //     unavailable — at view_origin(), which is the camera at 100%.
+    let screen_layer = crate::hud::screen_layer_active();
+    let origin = crate::overlay::view_origin();
     // Draft mode UI (independent of the saturation overlay switch).
     crate::draft::draw_panel();
     crate::draft::poll_pick_input();
     // Idle-worker hotkey (also independent of the saturation switch; needs the draw
     // hook, which is installed regardless).
     crate::idle_workers::poll();
-    // Larva picker: fires the selection on a confirmed count, then draws its entry UI.
+    // Larva picker: fires the selection on a confirmed count (the entry UI
+    // draws with the other screen overlays).
     crate::larva_pick::poll();
-    crate::larva_pick::draw();
     // Smart Tab: rotate the selection and drive the engine's card at the active
     // subgroup here in the draw pass (UI-safe). Never in the sim step — see frame.rs.
     // apply_display runs BEFORE poll so a Tab in the same frame as a fresh
@@ -327,29 +333,27 @@ unsafe extern "stdcall" fn draw_hook(surface: *mut core::ffi::c_void, bounds: *m
     // a fast box-select would be eaten).
     crate::tab_cycle::apply_display();
     crate::tab_cycle::poll();
-    // Global production queue (config-driven 2x icons; see queue.rs).
+    // Global production queue (config-driven 2x icons; the queue itself
+    // draws with the other screen overlays).
     crate::queue::poll_hide();
-    crate::queue::draw();
-    // Rollback bug-capture confirmation (drawn regardless of the overlay switch).
-    draw_capture_confirmation();
     // Dev REPL: poll the command file and draw transient probes.
     crate::repl::poll();
     crate::repl::draw();
     // Nydus in-world numbers: world annotations that must be visible whenever a
     // game runs, regardless of the saturation overlay switch. (The minimap
     // labels, idle badge and Tab indicator are screen-fixed and draw through
-    // the minimap dispatch — see hud.rs — so the zoom crop never hides them.)
+    // the deferred screen-text layer — see hud.rs — so the zoom never moves
+    // or scales them.)
     draw_world_annotations();
     draw_pass();
-    // Screen-fixed HUD overlays on the world surface, mapped into the zoom
-    // crop (identity at 100%): visible at every zoom level.
-    crate::hud::draw_overlays(surface, bounds);
+    if !screen_layer {
+        crate::hud::draw_screen_overlays(origin);
+    }
     // One-shot abilities dump (CM_PLUS_DUMP_ABILITIES=1): unit -> buttons ->
     // orders map for the smart-cast classification.
     crate::abilities::dump_once();
     patch_game_menu();
     poll_changes();
-    draw_changes();
 }
 
 /// In-world annotations that are independent of the saturation overlay: the
@@ -382,7 +386,7 @@ unsafe fn draw_world_annotations() {
 /// corner is the one coordinate space that has always been visible on this
 /// engine (the changes panel and Tab indicator use it). Grey race worker
 /// icon at 0, yellow when workers are idle.
-pub(crate) unsafe fn draw_idle_counter() {
+pub(crate) unsafe fn draw_idle_counter(origin: (i32, i32)) {
     if crate::frame::frame_count() == 0 {
         return; // not in a game
     }
@@ -402,11 +406,12 @@ pub(crate) unsafe fn draw_idle_counter() {
         crate::log::log(&format!("[cosmo-plus] idle counter: first draw n={n}"));
     });
 
-    // Top-left of the view, below the short changes-panel hint line.
-    let (cx, cy) = view_origin();
-    let (ox, oy) = crate::repl::badge_pin().unwrap_or((4, 54));
-    let tx = cx + ox;
-    let ty = cy + oy;
+    // SC2's lower-left corner: above the minimap panel (the corner itself is
+    // the unit panel). On the screen layer the origin is (0,0) and these are
+    // plain screen pixels; on the world fallback the origin is view_origin().
+    let (ox, oy) = crate::repl::badge_pin().unwrap_or((8, 340));
+    let tx = origin.0 + ox;
+    let ty = origin.1 + oy;
 
     // The race's greyed worker at 0 (SC2 shows the worker button greyed), the
     // first idle worker's icon otherwise.
@@ -450,7 +455,7 @@ fn tier1_worker_icon(race: u8) -> u32 {
 /// every zoom; its text renders at world scale (2x on screen at 200% zoom) —
 /// the same deliberate trade-off the Changes panel makes (constant-size
 /// screen-fixed text would need a scaled font this pipeline does not have).
-pub(crate) unsafe fn draw_tab_indicator() {
+pub(crate) unsafe fn draw_tab_indicator(origin: (i32, i32)) {
     let Some((active, total)) = crate::tab_cycle::indicator(crate::frame::frame_count()) else {
         return;
     };
@@ -484,10 +489,7 @@ pub(crate) unsafe fn draw_tab_indicator() {
         format!("Tab {active}/{total} \u{b7} {short}")
     };
     let _ = write!(&mut buf[..], "{label}");
-    // Camera-relative like the Changes panel: always inside the view, at
-    // every zoom level.
-    let (cx, cy) = view_origin();
-    bw_print_xy(buf.as_ptr(), cx + 60, cy + 250);
+    bw_print_xy(buf.as_ptr(), origin.0 + 320, origin.1 + 28);
     set_font_handle(core::ptr::null_mut());
 }
 
@@ -527,7 +529,7 @@ fn rollback_last_capture() -> u32 {
     unsafe { core::mem::transmute::<usize, unsafe extern "system" fn() -> u32>(ptr)() }
 }
 
-unsafe fn draw_capture_confirmation() {
+pub(crate) unsafe fn draw_capture_confirmation(origin: (i32, i32)) {
     let frame = crate::frame::frame_count();
     if frame == 0 {
         return;
@@ -551,8 +553,7 @@ unsafe fn draw_capture_confirmation() {
     let mut buf = [0u8; 32];
     buf.fill(0);
     let _ = write!(&mut buf[..], "BUG SAVED f{}", last);
-    let (cx, cy) = view_origin();
-    bw_print_xy(buf.as_ptr(), cx + 60, cy + 264);
+    bw_print_xy(buf.as_ptr(), origin.0 + 60, origin.1 + 264);
     set_font_handle(core::ptr::null_mut());
 }
 
@@ -884,7 +885,7 @@ pub(crate) fn changes_visible() -> bool {
 
 /// Draw the changes panel, or a short "how to open it" hint for the first ~20 s
 /// of each game. Independent of the saturation overlay switch.
-pub(crate) unsafe fn draw_changes() {
+pub(crate) unsafe fn draw_changes(origin: (i32, i32)) {
     let frame = crate::frame::frame_count();
     if frame == 0 {
         return;
@@ -911,21 +912,20 @@ pub(crate) unsafe fn draw_changes() {
     set_font_handle(font);
     write_draw_text(0, 0, 0x7FFF, 0x7FFF);
     *(G_PRINT_XY_ALIGNMENT as *mut u8) = 0x11;
-    let (cx, cy) = view_origin();
 
     if visible {
         get_color_handle(text_color::YELLOW);
         let title = padded("COSMONARCHY PLUS - CHANGES VS OG (Pause/Break closes)");
-        bw_print_xy(title.as_ptr(), cx + 60, cy + 24);
+        bw_print_xy(title.as_ptr(), origin.0 + 60, origin.1 + 24);
         get_color_handle(text_color::WHITE);
         for (i, line) in CHANGES_LINES.iter().enumerate() {
             let buf = padded(line);
-            bw_print_xy(buf.as_ptr(), cx + 70, cy + 48 + i as i32 * 14);
+            bw_print_xy(buf.as_ptr(), origin.0 + 70, origin.1 + 48 + i as i32 * 14);
         }
     } else {
         get_color_handle(text_color::YELLOW);
         let buf = padded("Cosmonarchy Plus: Pause/Break shows changes vs OG");
-        bw_print_xy(buf.as_ptr(), cx + 60, cy + 24);
+        bw_print_xy(buf.as_ptr(), origin.0 + 60, origin.1 + 24);
     }
     set_font_handle(core::ptr::null_mut());
 }
@@ -1164,15 +1164,14 @@ pub(crate) unsafe fn selftest_menu() {
 /// Draw a small panel of text lines fixed to the screen (draft UI). Screen space is
 /// expressed as camera-relative world coordinates, so the panel follows the camera.
 /// Read-only: called from the draw pass, so per-client differences are safe.
-pub(crate) unsafe fn draw_text_lines(title: &str, lines: &[String]) {
-    let (cx, cy) = view_origin();
+pub(crate) unsafe fn draw_text_lines(origin: (i32, i32), title: &str, lines: &[String]) {
     get_color_handle(4); // white
 
     let title_buf = padded(title);
-    bw_print_xy(title_buf.as_ptr(), cx + 60, cy + 24);
+    bw_print_xy(title_buf.as_ptr(), origin.0 + 60, origin.1 + 24);
     for (i, line) in lines.iter().enumerate() {
         let buf = padded(line);
-        bw_print_xy(buf.as_ptr(), cx + 70, cy + 48 + i as i32 * 14);
+        bw_print_xy(buf.as_ptr(), origin.0 + 70, origin.1 + 48 + i as i32 * 14);
     }
 }
 

@@ -148,8 +148,9 @@ unsafe fn resolve_table() -> *const ButtonSet {
     static LOGGED: AtomicBool = AtomicBool::new(false);
     if !LOGGED.swap(true, Ordering::SeqCst) {
         crate::log::log(&format!(
-            "[cosmo-plus] abilities: buttonset table UNRESOLVED (vanilla global holds 0x{vanilla:08X}); \
-             the Tab cycle cannot classify abilities and stays inert"
+            "[cosmo-plus] abilities: buttonset table UNRESOLVED (vanilla global holds 0x{:08X}); \
+             the Tab cycle cannot classify abilities and stays inert",
+            vanilla as usize,
         ));
     }
     std::ptr::null()

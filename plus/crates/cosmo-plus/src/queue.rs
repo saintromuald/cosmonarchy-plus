@@ -295,7 +295,7 @@ unsafe fn read_row() -> Option<Row> {
 
 /// Draw the 2x queue (camera-relative, top-left of the view). Suppressed while
 /// the changes panel or the larva entry window is open — they share the corner.
-pub(crate) unsafe fn draw() {
+pub(crate) unsafe fn draw(origin: (i32, i32)) {
     if !ARMED.load(Ordering::SeqCst) {
         return;
     }
@@ -332,7 +332,7 @@ pub(crate) unsafe fn draw() {
     if font.is_null() {
         return;
     }
-    let (cx, cy) = crate::overlay::view_origin();
+    let (cx, cy) = origin;
     crate::overlay::set_font_handle(font);
     crate::overlay::write_draw_text(0, 0, 0x7FFF, 0x7FFF);
     *(crate::overlay::G_PRINT_XY_ALIGNMENT as *mut u8) = 0x11;

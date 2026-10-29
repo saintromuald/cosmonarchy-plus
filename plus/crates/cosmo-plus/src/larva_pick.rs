@@ -371,8 +371,9 @@ pub(crate) unsafe fn poll() {
     crate::select::select_units_if_alt_not_held(list.as_ptr(), take as u32, 1, 1);
 }
 
-/// Called from the draw pass: show the count-entry feedback while the window is open.
-pub(crate) unsafe fn draw() {
+/// Draw the count-entry feedback while the window is open, at the given
+/// origin (screen layer or world-pass fallback).
+pub(crate) unsafe fn draw(origin: (i32, i32)) {
     if !ACTIVE.load(Ordering::SeqCst) {
         return;
     }
@@ -383,5 +384,5 @@ pub(crate) unsafe fn draw() {
         entry.value.to_string()
     };
     let line = format!("count: {shown}  (Enter = select, Esc = cancel)");
-    crate::overlay::draw_text_lines("Larva", &[line]);
+    crate::overlay::draw_text_lines(origin, "Larva", &[line]);
 }

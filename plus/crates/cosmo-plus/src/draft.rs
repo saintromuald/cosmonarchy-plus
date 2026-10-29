@@ -617,7 +617,7 @@ pub(crate) unsafe fn draw_panel() {
         picks.iter().filter(|&&p| p != PICK_NONE).count(),
         draft::OPTION_COUNT
     );
-    crate::overlay::draw_text_lines(&title, &names);
+    crate::overlay::draw_text_lines(unsafe { crate::overlay::view_origin() }, &title, &names);
 }
 
 /// Poll the local keyboard for 1–4 / Esc while a draft is open, and queue the pick as a

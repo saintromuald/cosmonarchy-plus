@@ -114,7 +114,7 @@ pub(crate) unsafe fn draw_world(buf: &mut [u8; 16]) {
 /// the minimap rect is in plain screen coordinates and the labels are
 /// screen-fixed (the old world-surface version added the camera, which
 /// pushed the labels out of view).
-pub(crate) unsafe fn draw_minimap(buf: &mut [u8; 16]) {
+pub(crate) unsafe fn draw_minimap(buf: &mut [u8; 16], screen: bool) {
     let Some(local) = local_player() else {
         return;
     };
@@ -137,8 +137,13 @@ pub(crate) unsafe fn draw_minimap(buf: &mut [u8; 16]) {
             buf.fill(0);
             let label = format!("{}", p.number);
             let _ = write!(&mut buf[..], "{label}");
-            // Centred on the point, screen-fixed via the zoom mapping.
-            let (sx, sy) = crate::hud::screen_to_surface(mx - 2, my - 4);
+            // On the deferred screen layer these are plain screen pixels; on
+            // the world pass they map through the zoom crop.
+            let (sx, sy) = if screen {
+                (mx - 2, my - 4)
+            } else {
+                crate::hud::screen_to_surface(mx - 2, my - 4)
+            };
             bw_print_xy(buf.as_ptr(), sx, sy);
         }
     }

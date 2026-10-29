@@ -95,12 +95,31 @@ unsafe fn table_plausible(table: *const ButtonSet) -> bool {
 /// first, then scan the fork's live `update_current_buttonset` (the E9 target
 /// at 0x004599A0) for absolute table-pointer loads and validate each
 /// candidate. Returns the pointer to the TABLE (not the global).
+/// Strong validation of one ButtonSet: buttons_in_set sane, first_button a
+/// readable pointer, and connected_unit == the unit id (the convention the
+/// rest of the code relies on: buttonset id == unit id). The previous
+/// count-only check latched onto a false-positive (a unit stat table) and
+/// made every unit classify as ability-less.
+unsafe fn buttonset_valid(bs: *const ButtonSet, id: u16) -> bool {
+    if bs.is_null() || !crate::overlay::readable_ptr(bs as *const u8, core::mem::size_of::<ButtonSet>()) {
+        return false;
+    }
+    let count = (*bs).buttons_in_set;
+    if count == 0 || count > MAX_BUTTONS {
+        return false;
+    }
+    let first = (*bs).first_button;
+    if first.is_null() || !crate::overlay::readable_ptr(first as *const u8, core::mem::size_of::<Button>()) {
+        return false;
+    }
+    (*bs).connected_unit as u16 == id
+}
+
 /// Sweep a memory range for the buttonset table. Returns (array base, stride)
 /// where stride 0 = pointer array, stride > 0 = value array of ButtonSets.
 unsafe fn sweep_for_table(base: usize, size: usize) -> Option<(usize, usize)> {
-    const IDS: &[u16] = &[7, 41, 63, 64, 106, 131, 314];
+    const IDS: &[u16] = &[7, 35, 41, 63, 64, 106, 131, 314];
     const STRIDES: &[usize] = &[12, 16, 20, 24];
-    let mut candidates: Vec<(usize, usize)> = Vec::new();
     let step = 4usize;
     let mut cell = base;
     let mut cells = 0u32;
@@ -113,35 +132,29 @@ unsafe fn sweep_for_table(base: usize, size: usize) -> Option<(usize, usize)> {
             if crate::overlay::readable_ptr(arr as *const u8, 800 * 4) {
                 let mut ok = 0;
                 for &id in IDS {
-                    let p = std::ptr::read((arr + id as usize * 4) as *const usize);
-                    if p == 0 || !crate::overlay::readable_ptr(p as *const u8, 8) {
-                        continue;
-                    }
-                    let count = std::ptr::read(p as *const u32);
-                    if (1..=64).contains(&count) {
+                    let p = std::ptr::read((arr + id as usize * 4) as *const *const ButtonSet);
+                    if buttonset_valid(p, id) {
                         ok += 1;
                     }
                 }
-                if ok >= 4 {
+                if ok >= 5 {
                     return Some((arr, 0));
                 }
-                candidates.push((arr, 0));
             }
             // value array: each id at arr + id*stride.
             for &st in STRIDES {
-                let need = IDS[IDS.len() - 1] as usize * st + 8;
+                let need = IDS[IDS.len() - 1] as usize * st + core::mem::size_of::<ButtonSet>();
                 if !crate::overlay::readable_ptr(arr as *const u8, need) {
                     continue;
                 }
                 let mut ok = 0;
                 for &id in IDS {
-                    let off = id as usize * st;
-                    let count = std::ptr::read((arr + off) as *const u32);
-                    if (1..=64).contains(&count) {
+                    let bs = (arr + id as usize * st) as *const ButtonSet;
+                    if buttonset_valid(bs, id) {
                         ok += 1;
                     }
                 }
-                if ok >= 4 {
+                if ok >= 5 {
                     return Some((arr, st));
                 }
             }
@@ -150,22 +163,17 @@ unsafe fn sweep_for_table(base: usize, size: usize) -> Option<(usize, usize)> {
         if crate::overlay::readable_ptr(cell as *const u8, 800 * 4) {
             let mut ok = 0;
             for &id in IDS {
-                let p = std::ptr::read((cell + id as usize * 4) as *const usize);
-                if p == 0 || !crate::overlay::readable_ptr(p as *const u8, 8) {
-                    continue;
-                }
-                let count = std::ptr::read(p as *const u32);
-                if (1..=64).contains(&count) {
+                let p = std::ptr::read((cell + id as usize * 4) as *const *const ButtonSet);
+                if buttonset_valid(p, id) {
                     ok += 1;
                 }
             }
-            if ok >= 4 {
+            if ok >= 5 {
                 return Some((cell, 0));
             }
         }
         cell += step;
     }
-    let _ = candidates;
     None
 }
 

@@ -337,19 +337,20 @@ pub(crate) unsafe fn draw(origin: (i32, i32)) {
     crate::overlay::write_draw_text(0, 0, 0x7FFF, 0x7FFF);
     *(crate::overlay::G_PRINT_XY_ALIGNMENT as *mut u8) = 0x11;
 
-    const ICON: i32 = 48; // 2x the mod's ~24px slot icons
-    const PITCH: i32 = 56;
-    const ROW_Y0: i32 = 44; // below the idle badge, above the Tab indicator
-    const ROW_Y1: i32 = 108;
+    let sc = crate::hud::screen_scale();
+    let icon: i32 = (48.0 * sc) as i32; // 2x the mod's ~24px slot icons
+    let pitch: i32 = (56.0 * sc) as i32;
+    let row_y0: i32 = (44.0 * sc) as i32; // below the idle badge, above the Tab indicator
+    let row_y1: i32 = (108.0 * sc) as i32;
     let mut buf = [0u8; 24];
     for (i, slot) in (0..row.slots).enumerate() {
-        // Row 2 restarts at the left edge (8 slots per row at 56px pitch fits
-        // a 640px view); continuing the x cursor would push slots 12+ off-view.
-        let x = cx + 4 + (i % 8) as i32 * PITCH;
-        let y = cy + if i < 8 { ROW_Y0 } else { ROW_Y1 };
+        // Row 2 restarts at the left edge; continuing the x cursor would push
+        // slots off-view.
+        let x = cx + (4.0 * sc) as i32 + (i % 8) as i32 * pitch;
+        let y = cy + if i < 8 { row_y0 } else { row_y1 };
         let unit = row.types[slot];
         let icon_id = bw_dat::UnitId(unit).icon();
-        crate::icon::draw_unit_icon_scaled(icon_id, x, y, ICON, ICON);
+        crate::icon::draw_unit_icon_scaled(icon_id, x, y, icon, icon);
 
         // Count (white, small font), drawn over the icon's corner.
         buf.fill(0);
@@ -361,14 +362,14 @@ pub(crate) unsafe fn draw(origin: (i32, i32)) {
 
         // Progress bar: the mod's guards replicated (time_cost == 0 →
         // instant/morph unit, no bar; remaining > time_cost → compacting
-        // queue, no bar), 2px tall at 2x.
+        // queue, no bar).
         let time_cost = bw_dat::UnitId(unit).build_time() as u32;
         let remaining = row.timers[slot] as u32;
         if time_cost != 0 && remaining <= time_cost {
-            let progress = (time_cost - remaining) * (ICON as u32) / time_cost;
+            let progress = (time_cost - remaining) * (icon as u32) / time_cost;
             if progress > 0 {
                 std::ptr::write(G_DRAW_COLOR_INDEX as *mut u8, 117); // the mod's bar colour
-                draw_box(x as u16, (y + ICON) as u16, progress as u16, 2);
+                draw_box(x as u16, (y + icon) as u16, progress as u16, 2);
             }
         }
     }

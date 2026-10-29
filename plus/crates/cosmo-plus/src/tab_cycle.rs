@@ -544,18 +544,27 @@ unsafe fn resolve_selection() -> bool {
 }
 
 /// Resolve the canonical selection table (the extender's
-/// `new_active_selection`). The extender rewrites two immediates inside
-/// `is_selected_unit_group_enabled` with the array's runtime address and its
-/// one-past-end slot — the same anchor pattern as the client table, verified
-/// against the shipped exe. A valid pair is exactly `EXTENDED_LIMIT * 4`
-/// bytes apart; otherwise the stock 12-slot canonical array stands (logged
-/// loudly — the extender may leave it untouched on builds where selection
-/// stays vanilla).
+/// `new_active_selection`), in build-robust order:
+///
+/// 1. The extender rewrites two immediates inside
+///    `is_selected_unit_group_enabled` with the array's runtime address and
+///    its one-past-end slot — the same anchor pattern as the client table,
+///    verified on the harness build. On SOME release builds those sites are
+///    not rewritten (garbage immediates), so this alone is not enough.
+/// 2. Struct fallback: `ccmu_extender` lays the three selection arrays out
+///    contiguously — `new_client_selection_group[240]`,
+///    `new_local_selection_group[240]`, `new_active_selection[240]` (see
+///    `hooks/limits/ccmu.h`) — so the canonical array sits exactly
+///    `2 * SelectionLimit * 4` bytes after the (reliably resolved) client
+///    table. Validated by the readable range + per-slot pointer checks on
+///    read (see `read_array`).
+/// 3. Vanilla 12-slot array as the last resort (logged loudly).
 unsafe fn resolve_canonical() -> bool {
     let cached = CANON_BASE.load(Ordering::SeqCst);
     if cached != 0 && crate::overlay::readable_ptr(cached as *const u8, EXTENDED_LIMIT * 4) {
         return true;
     }
+    // 1. Extender anchor pair (only when both validate exactly).
     let base = std::ptr::read(ANCHOR_CANON_BASE as *const u32) as usize;
     let end = std::ptr::read(ANCHOR_CANON_END as *const u32) as usize;
     if base != 0 && end == base + EXTENDED_LIMIT * 4 {
@@ -567,24 +576,43 @@ unsafe fn resolve_canonical() -> bool {
         ));
         return true;
     }
-    // Fallback: the stock 12-slot canonical array (the extender anchors did
-    // not validate — logged once, loudly).
+    // 2. Struct-delta fallback from the (extended) client table.
+    if resolve_selection() && SEL_LIMIT.load(Ordering::SeqCst) == EXTENDED_LIMIT {
+        let client = SEL_BASE.load(Ordering::SeqCst);
+        let delta = EXTENDED_LIMIT * 4 + EXTENDED_LIMIT * 4; // client + local
+        let candidate = client + delta;
+        if crate::overlay::readable_ptr(candidate as *const u8, EXTENDED_LIMIT * 4) {
+            CANON_BASE.store(candidate, Ordering::SeqCst);
+            CANON_LIMIT.store(EXTENDED_LIMIT, Ordering::SeqCst);
+            crate::log::log(&format!(
+                "[cosmo-plus] tab cycle: canonical selection anchors did not validate \
+                 (base 0x{base:08X}, end 0x{end:08X}); resolved via the extender struct \
+                 (client 0x{client:08X} + 0x{delta:X} = 0x{candidate:08X})"
+            ));
+            return true;
+        }
+    }
+    // 3. Vanilla 12-slot array (last resort — the engine's own selection may
+    //    not even be that table; the cycle then reads stale data, so this is
+    //    logged loudly and the boot report flags it).
     CANON_BASE.store(VANILLA_CANON, Ordering::SeqCst);
     CANON_LIMIT.store(VANILLA_LIMIT, Ordering::SeqCst);
     static FAILED_ONCE: AtomicBool = AtomicBool::new(false);
     if !FAILED_ONCE.swap(true, Ordering::SeqCst) {
         crate::log::log(&format!(
-            "[cosmo-plus] tab cycle: canonical selection anchors did not validate \
-             (base 0x{base:08X}, end 0x{end:08X}); using the vanilla 12-slot table \
-             at 0x{VANILLA_CANON:08X}"
+            "[cosmo-plus] tab cycle: canonical selection UNRESOLVED (anchors 0x{base:08X}/0x{end:08X} \
+             invalid, struct fallback unreadable); using the vanilla 12-slot table at \
+             0x{VANILLA_CANON:08X} — Tab may not match this build's selection"
         ));
     }
     true
 }
 
 /// Read a raw selection array as (unit ids, pointers) in array order. Stops at
-/// the first null slot (the engine nulls the tail on removal). `limit` caps the
-/// walk.
+/// the first null slot (the engine nulls the tail on removal). Every entry is
+/// pointer-validated before ANY dereference — a misresolved array (wrong
+/// build layout) must degrade to an empty read, never to an access violation.
+/// `limit` caps the walk.
 unsafe fn read_array(base: usize, limit: usize) -> Option<(Vec<u16>, Vec<u32>)> {
     let list = base as *const *mut Unit;
     let mut ids = Vec::with_capacity(16);
@@ -592,6 +620,9 @@ unsafe fn read_array(base: usize, limit: usize) -> Option<(Vec<u16>, Vec<u32>)> 
     for i in 0..limit {
         let unit = *list.add(i);
         if unit.is_null() {
+            break;
+        }
+        if !crate::overlay::readable_ptr(unit as *const u8, core::mem::size_of::<Unit>()) {
             break;
         }
         ptrs.push(unit as u32);

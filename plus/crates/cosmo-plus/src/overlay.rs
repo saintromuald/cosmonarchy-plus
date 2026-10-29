@@ -367,15 +367,16 @@ unsafe fn draw_world_annotations() {
     set_font_handle(core::ptr::null_mut());
 }
 
-/// The idle-worker counter, SC2-style: a screen-fixed worker icon + count at
-/// the bottom-left (above the minimap), drawn through the zoom-crop mapping so
-/// it stays at the same screen position at every zoom level, with the icon
-/// size-compensated so it also stays the same screen SIZE. The count is drawn
-/// after the icon so it survives any blit quirk. Grey with the race's worker
-/// icon at 0, yellow when workers are idle (SC2 shows the indicator whenever
-/// the value is meaningful; a fixed counter is also what the user asked for:
-/// "a text screen that is fixed on the screen that shows how many idle
-/// workers you have").
+/// The idle-worker counter, SC2-style: a worker icon + "Idle Workers: N" at
+/// the top-left of the VIEW (camera-relative), so it is always on screen at
+/// every zoom and on every build. Camera-relative is deliberate: the
+/// screen-fixed mapping (hud::screen_to_surface) depends on the widescreen
+/// WorldZoom statics, whose layout differs between gptp builds — on builds
+/// where it fails the mapping is identity and "screen" coordinates land on
+/// the WORLD (the counter then only shows near the map origin). The view
+/// corner is the one coordinate space that has always been visible on this
+/// engine (the changes panel and Tab indicator use it). Grey race worker
+/// icon at 0, yellow when workers are idle.
 pub(crate) unsafe fn draw_idle_counter() {
     if crate::frame::frame_count() == 0 {
         return; // not in a game
@@ -396,24 +397,17 @@ pub(crate) unsafe fn draw_idle_counter() {
         crate::log::log(&format!("[cosmo-plus] idle counter: first draw n={n}"));
     });
 
-    // Screen-fixed position: the SC2 lower-left corner is, in this engine,
-    // above the minimap panel (the corner itself is the unit panel). The
-    // REPL badge pin overrides for diagnostics.
-    let (ox, oy) = crate::repl::badge_pin().unwrap_or((4, 314));
-    // Map into the zoom crop once (position fixed on screen at every zoom).
-    let (tx, ty) = crate::hud::screen_to_surface(ox, oy);
+    // Top-left of the view, below the short changes-panel hint line.
+    let (cx, cy) = camera();
+    let (ox, oy) = crate::repl::badge_pin().unwrap_or((4, 30));
+    let tx = cx + ox;
+    let ty = cy + oy;
 
     // The race's greyed worker at 0 (SC2 shows the worker button greyed), the
-    // first idle worker's icon otherwise. Icon size compensated so it renders
-    // the same screen size at every zoom.
+    // first idle worker's icon otherwise.
     let race = player_race(local as u8);
     let icon_id = icon.unwrap_or_else(|| tier1_worker_icon(race));
-    let units = crate::hud::zoom_units() as i32;
-    let iw = 24 * 10000 / units;
-    let ih = 22 * 10000 / units;
-    if crate::icon::draw_unit_icon_scaled(icon_id, tx, ty, iw.max(1), ih.max(1)).is_none() {
-        return; // cmdicons GRP not loaded yet
-    }
+    crate::icon::draw_unit_icon_scaled(icon_id, tx, ty, 24, 22);
 
     set_font_handle(font);
     write_draw_text(0, 0, 0x7FFF, 0x7FFF);
@@ -425,7 +419,7 @@ pub(crate) unsafe fn draw_idle_counter() {
     let label = format!("Idle Workers: {n}");
     let len = label.len().min(buf.len() - 1);
     buf[..len].copy_from_slice(&label.as_bytes()[..len]);
-    let text_x = tx + iw + 4;
+    let text_x = tx + 28;
     get_color_handle(text_color::BLACK);
     bw_print_xy(buf.as_ptr(), text_x + 1, ty + 1);
     get_color_handle(if n > 0 { text_color::YELLOW } else { text_color::GREY2 });

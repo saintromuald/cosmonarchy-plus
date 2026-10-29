@@ -75,6 +75,21 @@ unsafe fn exec(line: &str) {
     let mut parts = line.split_whitespace();
     let cmd = parts.next().unwrap_or("");
     match cmd {
+        "mem" => {
+            // mem <hex-address> <count> — hex-dump live memory to the log.
+            let addr = parts.next().and_then(|s| usize::from_str_radix(s.trim_start_matches("0x"), 16).ok());
+            let count = parts.next().and_then(|s| s.parse::<usize>().ok()).unwrap_or(16).min(256);
+            match addr {
+                Some(a) if crate::overlay::readable_ptr(a as *const u8, count) => {
+                    let mut out = String::new();
+                    for i in 0..count {
+                        out.push_str(&format!("{:02X} ", std::ptr::read((a + i) as *const u8)));
+                    }
+                    reply(&format!("mem 0x{a:08X}: {out}"));
+                }
+                _ => reply("usage: mem <hex-addr> [count] (readable memory only)"),
+            }
+        }
         "badge" => match parts.next() {
             Some("on") => {
                 BADGE_SHOWN.store(true, Ordering::SeqCst);

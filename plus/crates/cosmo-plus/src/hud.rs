@@ -154,8 +154,13 @@ pub(crate) fn crop_top() -> i32 { CROP_TOP.load(Ordering::Relaxed) as i32 }
 pub(crate) fn crop_w() -> i32 { CROP_W.load(Ordering::Relaxed) as i32 }
 pub(crate) fn crop_h() -> i32 { CROP_H.load(Ordering::Relaxed) as i32 }
 
-/// The current crop offset relative to the camera (world px).
+/// The current crop offset relative to the camera (world px). At 100% zoom
+/// the crop is meaningless — the whole surface is visible — and the release
+/// build leaves stale values there, so it is forced to (0,0).
 pub(crate) fn crop_offset() -> (i32, i32) {
+    if zoom_units() == 10000 {
+        return (0, 0);
+    }
     (
         CROP_LEFT.load(Ordering::Relaxed) as i32,
         CROP_TOP.load(Ordering::Relaxed) as i32,
@@ -233,13 +238,17 @@ unsafe fn refresh_screen_scale(screen: bool) {
     SCREEN_SCALE.store(1000, Ordering::Relaxed);
 }
 
-/// Whether the screen-corner overlays draw on the engine's screen-text layer
-/// this frame: the hook is armed (the chained call runs EVERY frame at every
-/// zoom, and live testing showed the overlays drawn there survive at 200% —
-/// the fork's draw order makes that the presented surface). The world pass
-/// is only the fallback for builds where the chain cannot be installed.
+/// Which layer the screen-corner overlays draw on this frame, per the
+/// EMPIRICALLY verified zoom behaviour of the release build:
+///   * 200% (the default and the zoom people actually play at): the chained
+///     engine screen-text call lands on the presented screen buffer —
+///     fixed position, fixed size (user-verified);
+///   * 100%: the world surface IS the presented surface; the world pass at
+///     camera + (0,0) crop is exact;
+///   * any other zoom: the world pass with the live camera-relative crop
+///     (best effort).
 pub(crate) fn screen_layer_active() -> bool {
-    CHAIN.load(Ordering::SeqCst) != 0
+    CHAIN.load(Ordering::SeqCst) != 0 && zoom_units() == 20000
 }
 
 /// Install both hud mechanisms: the zoom statics resolution (per-frame crop

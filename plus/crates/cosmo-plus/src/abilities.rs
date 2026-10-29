@@ -102,7 +102,8 @@ unsafe fn resolve_table() -> *const ButtonSet {
     if table_plausible(vanilla) {
         TABLE_GLOBAL_ADDR.store(G_BUTTONSET_TABLE, Ordering::SeqCst);
         crate::log::log(&format!(
-            "[cosmo-plus] abilities: buttonset table @ 0x{vanilla:08X} (vanilla global 0x{G_BUTTONSET_TABLE:08X})"
+            "[cosmo-plus] abilities: buttonset table @ 0x{:08X} (vanilla global 0x{G_BUTTONSET_TABLE:08X})",
+            vanilla as usize,
         ));
         return vanilla;
     }
@@ -136,8 +137,9 @@ unsafe fn resolve_table() -> *const ButtonSet {
             if table_plausible(table) {
                 TABLE_GLOBAL_ADDR.store(imm, Ordering::SeqCst);
                 crate::log::log(&format!(
-                    "[cosmo-plus] abilities: buttonset table @ 0x{table:08X} (global 0x{imm:08X} \
-                     found in the fork's card updater @ 0x{fns:08X}+0x{off:X})"
+                    "[cosmo-plus] abilities: buttonset table @ 0x{:08X} (global 0x{imm:08X} \
+                     found in the fork's card updater @ 0x{fns:08X}+0x{off:X})",
+                    table as usize,
                 ));
                 return table;
             }

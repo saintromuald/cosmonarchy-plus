@@ -259,8 +259,9 @@ unsafe fn install_deferred_site() {
         let Some(body_off) = body else {
             crate::log::log(
                 "[cosmo-plus] hud overlay: draw_deferred_screen_text body not found in \
-                 gptp.qdp; screen-fixed overlays fall back to the world pass (zoom-scaled)",
+                 gptp.qdp; trying the engine's screen-text call site",
             );
+            install_via_screen_text_call();
             return;
         };
         // `state::scan` returns a live absolute address; the offset within the
@@ -322,6 +323,47 @@ unsafe fn install_deferred_site() {
         ));
         crate::state::hook("deferred-screen-text", site, chain as usize, my as usize);
     }
+}
+
+/// Fallback strategy: chain the engine's own screen-text call site
+/// (`draw_screen_text`, 0x004BD614). The fork call_patches this site at load
+/// (the on-disk exe still targets vanilla 0x48CF60), so the live rel32 is
+/// read and chained — whether it points at the fork's function or the
+/// vanilla pass, our overlays draw right after the message log, on the same
+/// surface. If the build defers the text pass to after the zoom resample,
+/// this surface is pre-resample and the overlays may be clobbered — the
+/// deferred-body strategy above is the preferred path; this one is the
+/// empirical fallback.
+unsafe fn install_via_screen_text_call() {
+    const SITE: usize = 0x004BD614;
+    let b = std::ptr::read(SITE as *const u8);
+    if b != 0xE8 {
+        crate::log::log(&format!(
+            "[cosmo-plus] hud overlay: screen-text call site holds 0x{b:02X} (expected E8); \
+             falling back to the world pass"
+        ));
+        return;
+    }
+    let rel = std::ptr::read((SITE + 1) as *const i32);
+    let chain = (SITE as u32).wrapping_add(5).wrapping_add(rel as u32);
+    CHAIN.store(chain, Ordering::SeqCst);
+
+    let my = wrapper as *const () as usize as u32;
+    let new_rel = my.wrapping_sub(SITE as u32 + 5) as i32;
+    let patch: [u8; 5] = [
+        0xE8,
+        new_rel as u8,
+        (new_rel >> 8) as u8,
+        (new_rel >> 16) as u8,
+        (new_rel >> 24) as u8,
+    ];
+    let api = crate::plus::api();
+    let r = (api.write_exe_memory)(SITE, patch.as_ptr(), patch.len());
+    crate::log::log(&format!(
+        "[cosmo-plus] hud overlay: chained the engine's screen-text call @ 0x{SITE:08X} \
+         (chain 0x{chain:08X}, patch={r}); overlays draw with the message log"
+    ));
+    crate::state::hook("screen-text-call", SITE, chain as usize, my as usize);
 }
 
 /// Replaces the original callee: chain it first (it draws the fork's message

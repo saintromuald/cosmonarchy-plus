@@ -306,6 +306,11 @@ unsafe extern "stdcall" fn draw_hook(surface: *mut core::ffi::c_void, bounds: *m
             core::mem::transmute(old);
         old(surface, bounds);
     }
+    // Refresh the per-frame zoom view FIRST: every screen-corner overlay this
+    // frame (larva entry, queue, changes panel, idle counter, Tab indicator)
+    // anchors at view_origin() = camera + crop offset, and the crop can change
+    // between frames (wheel zoom). One consistent read per frame.
+    crate::hud::refresh();
     // Draft mode UI (independent of the saturation overlay switch).
     crate::draft::draw_panel();
     crate::draft::poll_pick_input();
@@ -398,8 +403,8 @@ pub(crate) unsafe fn draw_idle_counter() {
     });
 
     // Top-left of the view, below the short changes-panel hint line.
-    let (cx, cy) = camera();
-    let (ox, oy) = crate::repl::badge_pin().unwrap_or((4, 30));
+    let (cx, cy) = view_origin();
+    let (ox, oy) = crate::repl::badge_pin().unwrap_or((4, 54));
     let tx = cx + ox;
     let ty = cy + oy;
 
@@ -481,7 +486,7 @@ pub(crate) unsafe fn draw_tab_indicator() {
     let _ = write!(&mut buf[..], "{label}");
     // Camera-relative like the Changes panel: always inside the view, at
     // every zoom level.
-    let (cx, cy) = camera();
+    let (cx, cy) = view_origin();
     bw_print_xy(buf.as_ptr(), cx + 60, cy + 250);
     set_font_handle(core::ptr::null_mut());
 }
@@ -546,7 +551,7 @@ unsafe fn draw_capture_confirmation() {
     let mut buf = [0u8; 32];
     buf.fill(0);
     let _ = write!(&mut buf[..], "BUG SAVED f{}", last);
-    let (cx, cy) = camera();
+    let (cx, cy) = view_origin();
     bw_print_xy(buf.as_ptr(), cx + 60, cy + 264);
     set_font_handle(core::ptr::null_mut());
 }
@@ -906,7 +911,7 @@ pub(crate) unsafe fn draw_changes() {
     set_font_handle(font);
     write_draw_text(0, 0, 0x7FFF, 0x7FFF);
     *(G_PRINT_XY_ALIGNMENT as *mut u8) = 0x11;
-    let (cx, cy) = camera();
+    let (cx, cy) = view_origin();
 
     if visible {
         get_color_handle(text_color::YELLOW);
@@ -1160,7 +1165,7 @@ pub(crate) unsafe fn selftest_menu() {
 /// expressed as camera-relative world coordinates, so the panel follows the camera.
 /// Read-only: called from the draw pass, so per-client differences are safe.
 pub(crate) unsafe fn draw_text_lines(title: &str, lines: &[String]) {
-    let (cx, cy) = camera();
+    let (cx, cy) = view_origin();
     get_color_handle(4); // white
 
     let title_buf = padded(title);
@@ -1239,6 +1244,17 @@ pub(crate) unsafe fn camera() -> (i32, i32) {
     let x = std::ptr::read(G_SCREEN_X_PTR as *const i32);
     let y = std::ptr::read(G_SCREEN_Y_PTR as *const i32);
     (x, y)
+}
+
+/// The visible view's top-left corner in world px: camera + the zoom crop's
+/// camera-relative offset. Every screen-corner overlay (idle counter, Tab
+/// indicator, changes panel, larva entry, queue) anchors here — drawing at the
+/// bare camera position places them outside the visible crop at 200% zoom,
+/// which is why none of the Plus UI showed up in the release build.
+pub(crate) unsafe fn view_origin() -> (i32, i32) {
+    let (cx, cy) = camera();
+    let (ox, oy) = crate::hud::crop_offset();
+    (cx + ox, cy + oy)
 }
 
 /// Write the text clip box (`g_draw_text`) so our labels are not clipped to the message log.

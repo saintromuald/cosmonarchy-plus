@@ -73,16 +73,15 @@ pub(crate) fn install() {
     ));
 }
 
-/// Map a screen position to world-surface coordinates for the current zoom
-/// (identity at 100%). The zoom statics are re-read every frame (see
-/// `refresh_zoom_view`); the addresses are loader-stable, the VALUES change
-/// whenever the player zooms — the old once-cached crop went stale on the
-/// first wheel-scroll and pushed screen-fixed overlays out of the visible
-/// area.
+/// Map a screen position to world-surface coordinates for the current zoom:
+/// camera + crop offset + screen * units / 10000. The camera term is what the
+/// previous version was missing — the crop is camera-RELATIVE, so screen (0,0)
+/// is the visible view's top-left only after adding both.
 pub(crate) unsafe fn screen_to_surface(sx: i32, sy: i32) -> (i32, i32) {
+    let (cx, cy) = crate::overlay::camera();
     let units = UNITS.load(Ordering::Relaxed).max(10000) as i32;
-    let wx = CROP_LEFT.load(Ordering::Relaxed) as i32 + sx * units / 10000;
-    let wy = CROP_TOP.load(Ordering::Relaxed) as i32 + sy * units / 10000;
+    let wx = cx + CROP_LEFT.load(Ordering::Relaxed) as i32 + sx * units / 10000;
+    let wy = cy + CROP_TOP.load(Ordering::Relaxed) as i32 + sy * units / 10000;
     (wx, wy)
 }
 
@@ -94,8 +93,14 @@ pub(crate) fn zoom_units() -> u32 {
 }
 
 /// Re-read the live zoom statics (units + crop) once per frame, at the top of
-/// the draw pass. The values change on every wheel-scroll; a torn read during
-/// a transition is clamped by the sanity range and self-heals next frame.
+/// the draw pass. The crop is CAMERA-RELATIVE — the mod's `systems/display/
+/// zoom.h` documents it as "Crop rectangle in world pixels relative to
+/// camera" — so a valid crop may start far beyond the surface bounds (the
+/// 200% view is camera + crop.left/top). The previous surface-fit validation
+/// wrongly rejected exactly that (crop 960,270,960,540 vs a 640x480
+/// surface), fell back to identity, and pushed every screen-fixed overlay
+/// into world space. Accept the crop whenever the zoom ladder and the
+/// dimensions are sane.
 unsafe fn refresh_zoom_view(surface_w: i32, surface_h: i32) {
     let units_addr = ZOOM_UNITS_ADDR.load(Ordering::SeqCst);
     if units_addr == 0 {
@@ -112,16 +117,14 @@ unsafe fn refresh_zoom_view(surface_w: i32, surface_h: i32) {
     let ok = (10000..=30000).contains(&units)
         && w > 0
         && h > 0
-        && w <= surface_w
-        && h <= surface_h
-        && l + w <= surface_w
-        && t + h <= surface_h;
+        && w <= 4096
+        && h <= 4096;
     if !RESOLVED.load(Ordering::SeqCst) {
         RESOLVED.store(true, Ordering::SeqCst);
         crate::log::log(&format!(
             "[cosmo-plus] hud overlay: zoom layout units={units} crop=({l},{t},{w},{h}) \
              surface=({surface_w},{surface_h}) -> {}",
-            if ok { "VALID" } else { "INVALID (identity mapping)" }
+            if ok { "VALID (camera-relative crop)" } else { "INVALID (identity mapping)" }
         ));
     }
     if ok {
@@ -136,6 +139,20 @@ unsafe fn refresh_zoom_view(surface_w: i32, surface_h: i32) {
         CROP_LEFT.store(0, Ordering::Relaxed);
         CROP_TOP.store(0, Ordering::Relaxed);
     }
+}
+
+/// Refresh the per-frame zoom view. Called from the draw hook BEFORE every
+/// overlay so all of them share one consistent crop read for the frame.
+pub(crate) unsafe fn refresh() {
+    refresh_zoom_view(0, 0);
+}
+
+/// The current crop offset relative to the camera (world px).
+pub(crate) fn crop_offset() -> (i32, i32) {
+    (
+        CROP_LEFT.load(Ordering::Relaxed) as i32,
+        CROP_TOP.load(Ordering::Relaxed) as i32,
+    )
 }
 
 /// Minimal head of the vanilla `graphics::Bitmap` (width/height, u16 each).
@@ -180,27 +197,57 @@ pub(crate) unsafe fn draw_overlays(surface: *mut core::ffi::c_void, _bounds: *mu
     }
 }
 
-/// One-shot state log + per-frame markers at the candidate transforms:
-/// M1 = plain screen coords, M2 = camera-relative (world-surface style),
-/// M3 = anchored on the minimap rect.
+/// One-shot state log + per-frame markers at the candidate transforms
+/// (CM_PLUS_HUD_PROBE=1): the player reports which marker sits at the
+/// screen's top-left corner, which pins the correct coordinate model for
+/// the build:
+///   A = crop-relative  (camera + crop.left/top + offset) — the mod's model
+///   B = camera-relative (camera + offset)                  — current overlay model
+///   C = raw surface coords (identity)                      — broken fallback
+/// A yellow box outlines the hypothesized visible region for A.
 unsafe fn probe_markers() {
-    let rect = crate::state::minimap_rect().unwrap_or([6, 348, 133, 475]);
     let (cx, cy) = crate::overlay::camera();
-    static LOGGED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
-    if !LOGGED.swap(true, std::sync::atomic::Ordering::SeqCst) {
+    let units = UNITS.load(Ordering::Relaxed);
+    let (cl, ct, cw, ch) = (
+        CROP_LEFT.load(Ordering::Relaxed) as i32,
+        CROP_TOP.load(Ordering::Relaxed) as i32,
+        CROP_W.load(Ordering::Relaxed) as i32,
+        CROP_H.load(Ordering::Relaxed) as i32,
+    );
+    static LOGGED: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+    let frame = crate::frame::frame_count_safe();
+    if LOGGED.load(std::sync::atomic::Ordering::Relaxed) == 0 || frame % 600 == 0 {
+        LOGGED.store(1, std::sync::atomic::Ordering::Relaxed);
         crate::log::log(&format!(
-            "[cosmo-plus] hud probe: rect={rect:?} camera=({cx},{cy}) units={}",
-            UNITS.load(Ordering::Relaxed)
+            "[cosmo-plus] hud probe: frame={frame} camera=({cx},{cy}) units={units} \
+             crop=({cl},{ct},{cw},{ch})"
         ));
     }
+
+    // A: crop-relative (the mod's documented model).
+    let (ax, ay) = (cx + cl + 8, cy + ct + 8);
+    // B: camera-relative.
+    let (bx, by) = (cx + 8, cy + 8);
+    // C: raw surface.
+    let (cx3, cy3) = (8, 8);
+
+    // Yellow box around the hypothesized visible region (crop-relative).
     crate::overlay::get_color_handle(cosmo_plus_core::saturation::text_color::YELLOW);
-    let m1 = b"M1\0";
-    let m2 = b"M2\0";
-    let m3 = b"M3\0";
-    let (x1, y1) = screen_to_surface(8, 8);
-    let (x2, y2) = screen_to_surface(8 + cx, 8 + cy);
-    let (x3, y3) = screen_to_surface(rect[0] + 2, rect[1] + 2);
-    crate::overlay::bw_print_xy(m1.as_ptr(), x1, y1);
-    crate::overlay::bw_print_xy(m2.as_ptr(), x2, y2);
-    crate::overlay::bw_print_xy(m3.as_ptr(), x3, y3);
+    let box_side = b"+\0";
+    for i in 0..cw.max(0).min(1280) / 8 {
+        crate::overlay::bw_print_xy(box_side.as_ptr(), cx + cl + i * 8, cy + ct);
+        crate::overlay::bw_print_xy(box_side.as_ptr(), cx + cl + i * 8, cy + ct + ch);
+    }
+    for i in 0..ch.max(0).min(960) / 8 {
+        crate::overlay::bw_print_xy(box_side.as_ptr(), cx + cl, cy + ct + i * 8);
+        crate::overlay::bw_print_xy(box_side.as_ptr(), cx + cl + cw, cy + ct + i * 8);
+    }
+
+    crate::overlay::get_color_handle(cosmo_plus_core::saturation::text_color::WHITE);
+    let a = b"A\0";
+    let b = b"B\0";
+    let c = b"C\0";
+    crate::overlay::bw_print_xy(a.as_ptr(), ax, ay);
+    crate::overlay::bw_print_xy(b.as_ptr(), bx, by);
+    crate::overlay::bw_print_xy(c.as_ptr(), cx3, cy3);
 }

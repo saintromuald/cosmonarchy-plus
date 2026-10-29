@@ -332,7 +332,7 @@ pub(crate) unsafe fn draw() {
     if font.is_null() {
         return;
     }
-    let (cx, cy) = crate::overlay::camera();
+    let (cx, cy) = crate::overlay::view_origin();
     crate::overlay::set_font_handle(font);
     crate::overlay::write_draw_text(0, 0, 0x7FFF, 0x7FFF);
     *(crate::overlay::G_PRINT_XY_ALIGNMENT as *mut u8) = 0x11;

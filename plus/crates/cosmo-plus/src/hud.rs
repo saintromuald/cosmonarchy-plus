@@ -483,16 +483,18 @@ unsafe fn discover_deferred_pass(chain_fn: usize) -> bool {
         "[cosmo-plus] hud overlay: deferred rediscovery: pending flag 0x{flag:08X}"
     ));
     // Deferred body: cmp byte [flag],0; je ...; mov byte [flag],0 ...
-    // Every read is page-guarded: the module image can hold unmapped gaps
-    // between sections, and a raw read there is an instant boot crash (seen:
-    // AV 0x79e0c2f8 inside the plugin during this scan).
+    // Reads are guarded against unmapped gaps between sections (raw reads
+    // there were an instant boot crash: AV 0x79e0c2f8). Guarding per byte
+    // with VirtualQuery froze map load (millions of queries per pass), so
+    // the page map is built once here and every probe is a bit test.
     let Some((base, size)) = crate::zoom::gptp_module() else {
         return fail("gptp module lookup");
     };
+    let guard = crate::overlay::PageGuard::new(base, size);
     let mut body: Option<usize> = None;
     for i in 0..size.saturating_sub(24) {
         let site = base + i;
-        if !crate::overlay::readable_ptr(site as *const u8, 8) {
+        if !guard.readable(site, 8) {
             continue;
         }
         if std::ptr::read(site as *const u8) != 0x80
@@ -506,6 +508,9 @@ unsafe fn discover_deferred_pass(chain_fn: usize) -> bool {
         }
         // je follows; then a C6 05 with the same imm within 24 bytes.
         for off in 7..24 {
+            if site + off + 5 > base + size || !guard.readable(site + off, 5) {
+                continue;
+            }
             if std::ptr::read((site + off) as *const u8) == 0xC6
                 && std::ptr::read((site + off + 1) as *const u8) == 0x05
                 && std::ptr::read((site + off + 2) as *const u32) as usize == flag
@@ -528,7 +533,7 @@ unsafe fn discover_deferred_pass(chain_fn: usize) -> bool {
     let mut site: Option<usize> = None;
     for i in 0..size.saturating_sub(5) {
         let s = base + i;
-        if !crate::overlay::readable_ptr(s as *const u8, 5) {
+        if !guard.readable(s, 5) {
             continue;
         }
         if std::ptr::read(s as *const u8) != 0xE8 {
@@ -542,7 +547,7 @@ unsafe fn discover_deferred_pass(chain_fn: usize) -> bool {
         }
         if t > 0
             && t < (base + size) as i64
-            && crate::overlay::readable_ptr(t as *const u8, 5)
+            && guard.readable(t as usize, 5)
             && std::ptr::read(t as *const u8) == 0xE9
         {
             let jrel = std::ptr::read((t as usize + 1) as *const i32) as i64;

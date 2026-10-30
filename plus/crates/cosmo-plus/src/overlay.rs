@@ -1027,6 +1027,77 @@ pub(crate) fn readable_ptr(ptr: *const u8, len: usize) -> bool {
     region_end >= ptr as usize + len
 }
 
+/// Precomputed per-page readability map over one address range, so hot
+/// scans can guard every read with a bit test instead of a VirtualQuery
+/// per byte. Built with a single VirtualQuery walk (~2k calls for an 8 MiB
+/// module image instead of ~8M); the page criteria match [`readable_ptr`].
+pub(crate) struct PageGuard {
+    base: usize,
+    end: usize,
+    bits: Vec<u8>, // one bit per 4 KiB page of [base, end)
+}
+
+impl PageGuard {
+    pub(crate) fn new(base: usize, size: usize) -> Self {
+        use windows_sys::Win32::System::Memory::{
+            VirtualQuery, MEMORY_BASIC_INFORMATION, MEM_COMMIT, PAGE_GUARD, PAGE_NOACCESS,
+        };
+        const PAGE: usize = 0x1000;
+        let end = base + size;
+        let pages = (size + PAGE - 1) / PAGE;
+        let mut bits = vec![0u8; (pages + 7) / 8];
+        let mut p = base;
+        while p < end {
+            let mut mbi: MEMORY_BASIC_INFORMATION = unsafe { core::mem::zeroed() };
+            let queried = unsafe {
+                VirtualQuery(
+                    p as *const core::ffi::c_void,
+                    &mut mbi,
+                    core::mem::size_of::<MEMORY_BASIC_INFORMATION>(),
+                )
+            };
+            let region_end = if queried == 0 {
+                p + PAGE
+            } else {
+                mbi.BaseAddress as usize + mbi.RegionSize
+            };
+            let readable = queried != 0
+                && mbi.State == MEM_COMMIT
+                && mbi.Protect & (PAGE_NOACCESS | PAGE_GUARD) == 0;
+            let q_end = region_end.min(end);
+            if readable {
+                let mut q = p;
+                while q < q_end {
+                    let idx = (q - base) / PAGE;
+                    bits[idx / 8] |= 1u8 << (idx % 8);
+                    q += PAGE;
+                }
+            }
+            p = if region_end > p { q_end } else { p + PAGE };
+        }
+        Self { base, end, bits }
+    }
+
+    /// True when every byte of [ptr, ptr+len) lies inside a page that was
+    /// committed and readable at construction time.
+    pub(crate) fn readable(&self, ptr: usize, len: usize) -> bool {
+        const PAGE: usize = 0x1000;
+        if len == 0 || ptr < self.base || ptr.saturating_add(len) > self.end {
+            return false;
+        }
+        let first = (ptr - self.base) / PAGE;
+        let last = (ptr - self.base + len - 1) / PAGE;
+        let mut idx = first;
+        while idx <= last {
+            if self.bits[idx / 8] & (1u8 << (idx % 8)) == 0 {
+                return false;
+            }
+            idx += 1;
+        }
+        true
+    }
+}
+
 /// Bounded, guard-checked C string read.
 fn read_cstr(ptr: *const u8, max: usize) -> Option<Vec<u8>> {
     if !readable_ptr(ptr, 1) {

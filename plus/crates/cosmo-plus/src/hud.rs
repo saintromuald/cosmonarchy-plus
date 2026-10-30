@@ -445,6 +445,12 @@ unsafe fn install_via_screen_text_call() {
 /// flag: `cmp byte [flag],0; je; mov byte [flag],0; call draw_engine; ret`.
 /// Then find its single caller (following jmp thunks) and re-chain.
 unsafe fn discover_deferred_pass(chain_fn: usize) -> bool {
+    if crate::config::env_flag("CM_PLUS_NO_DEFERRED_RECHAIN") {
+        crate::log::log(
+            "[cosmo-plus] hud overlay: deferred re-chain disabled              (CM_PLUS_NO_DEFERRED_RECHAIN)",
+        );
+        return false;
+    }
     let fail = |step: &str| {
         crate::log::log(&format!(
             "[cosmo-plus] hud overlay: deferred rediscovery failed at {step}"
@@ -477,12 +483,18 @@ unsafe fn discover_deferred_pass(chain_fn: usize) -> bool {
         "[cosmo-plus] hud overlay: deferred rediscovery: pending flag 0x{flag:08X}"
     ));
     // Deferred body: cmp byte [flag],0; je ...; mov byte [flag],0 ...
+    // Every read is page-guarded: the module image can hold unmapped gaps
+    // between sections, and a raw read there is an instant boot crash (seen:
+    // AV 0x79e0c2f8 inside the plugin during this scan).
     let Some((base, size)) = crate::zoom::gptp_module() else {
         return fail("gptp module lookup");
     };
     let mut body: Option<usize> = None;
     for i in 0..size.saturating_sub(24) {
         let site = base + i;
+        if !crate::overlay::readable_ptr(site as *const u8, 8) {
+            continue;
+        }
         if std::ptr::read(site as *const u8) != 0x80
             || std::ptr::read((site + 1) as *const u8) != 0x3D
         {
@@ -516,6 +528,9 @@ unsafe fn discover_deferred_pass(chain_fn: usize) -> bool {
     let mut site: Option<usize> = None;
     for i in 0..size.saturating_sub(5) {
         let s = base + i;
+        if !crate::overlay::readable_ptr(s as *const u8, 5) {
+            continue;
+        }
         if std::ptr::read(s as *const u8) != 0xE8 {
             continue;
         }
@@ -525,7 +540,11 @@ unsafe fn discover_deferred_pass(chain_fn: usize) -> bool {
             site = Some(s);
             break;
         }
-        if t > 0 && t < (base + size) as i64 && std::ptr::read(t as *const u8) == 0xE9 {
+        if t > 0
+            && t < (base + size) as i64
+            && crate::overlay::readable_ptr(t as *const u8, 5)
+            && std::ptr::read(t as *const u8) == 0xE9
+        {
             let jrel = std::ptr::read((t as usize + 1) as *const i32) as i64;
             if t + 5 + jrel == body as i64 {
                 site = Some(s);

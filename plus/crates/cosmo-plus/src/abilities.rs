@@ -101,11 +101,12 @@ unsafe fn table_plausible(table: *const ButtonSet) -> bool {
 /// safe; only the first_button pointers are validated against the page map.
 unsafe fn exe_table_plausible() -> bool {
     const IDS: &[u16] = &[7, 9, 35, 41, 63, 64, 106, 131];
-    let guard = full_space_guard();
     let mut ok = 0;
     for &id in IDS {
         let bs = (G_BUTTONSET_TABLE + id as usize * 12) as *const ButtonSet;
-        if !guard.readable(bs as usize, core::mem::size_of::<ButtonSet>()) {
+        // Bounded VirtualQuery here is fine: eight records + eight buttons is
+        // a couple dozen queries, once per resolution attempt.
+        if !crate::overlay::readable_ptr(bs as *const u8, core::mem::size_of::<ButtonSet>()) {
             continue;
         }
         let count = (*bs).buttons_in_set;
@@ -113,7 +114,9 @@ unsafe fn exe_table_plausible() -> bool {
             continue;
         }
         let first = (*bs).first_button;
-        if first.is_null() || !guard.readable(first as usize, core::mem::size_of::<Button>()) {
+        if first.is_null()
+            || !crate::overlay::readable_ptr(first as *const u8, core::mem::size_of::<Button>())
+        {
             continue;
         }
         let b = &*first;
@@ -150,23 +153,6 @@ unsafe fn buttonset_valid(bs: *const ButtonSet, id: u16) -> bool {
     (*bs).connected_unit as u16 == id
 }
 
-/// When the memory sweep last ran (throttle: see `resolve_table`).
-static LAST_SWEEP: Lazy<Mutex<Option<std::time::Instant>>> = Lazy::new(|| Mutex::new(None));
-/// Minimum gap between full sweeps. A full sweep walks every 4-byte cell of
-/// the gptp module image; unthrottled per-frame retries (the dump flag is on
-/// in the live config) stalled the in-game draw pass for minutes — the Unit
-/// Tester freeze. One sweep per interval keeps the draw path live while the
-/// table is unresolved.
-const SWEEP_RETRY: std::time::Duration = std::time::Duration::from_secs(10);
-
-/// The whole 2 GiB user address space as one page map, so every readability
-/// check inside the sweep is a bit test. The candidates the sweep validates
-/// (table arrays) are heap-resident in the widescreen build — they can live
-/// anywhere, so the map must span the full space, not just one module.
-fn full_space_guard() -> PageGuard {
-    PageGuard::new(0x10000, 0x7FFE_0000 - 0x10000)
-}
-
 /// `buttonset_valid` against a prebuilt page map: the readability checks are
 /// bit tests, only the field reads remain. (The raw `buttonset_valid` is fine
 /// for one-off probes; the sweep needs this to avoid a VirtualQuery per
@@ -188,13 +174,17 @@ unsafe fn buttonset_valid_guarded(bs: *const ButtonSet, id: u16, guard: &PageGua
 
 /// Sweep a memory range for the buttonset table. Returns (array base, stride)
 /// where stride 0 = pointer array, stride > 0 = value array of ButtonSets.
+/// The page map covers the swept range only (module-scoped, like the hud
+/// scan) — candidate pointers outside it simply fail the bit test, which is
+/// fine: the primary resolutions (vanilla global / exe-embedded array) run
+/// before this fallback.
 unsafe fn sweep_for_table(base: usize, size: usize) -> Option<(usize, usize)> {
     const IDS: &[u16] = &[7, 35, 41, 63, 64, 106, 131, 314];
     const STRIDES: &[usize] = &[12, 16, 20, 24];
     // Every candidate read is guarded by a bit test against the page map; the
     // previous per-cell VirtualQuery version ran tens of millions of queries
     // per pass and froze the game (see the freeze watchdog captures).
-    let guard = full_space_guard();
+    let guard = PageGuard::new(base, size);
     let step = 4usize;
     let max_cells = (size / step).min(8_000_000) as u32;
     let mut cell = base;
@@ -271,6 +261,15 @@ pub(crate) unsafe fn resolved_table_base() -> usize {
         std::ptr::read(base as *const *mut ButtonSet) as usize
     }
 }
+
+/// When the memory sweep last ran (throttle: see `resolve_table`).
+static LAST_SWEEP: Lazy<Mutex<Option<std::time::Instant>>> = Lazy::new(|| Mutex::new(None));
+/// Minimum gap between full sweeps. A full sweep walks every 4-byte cell of
+/// the gptp module image; unthrottled per-frame retries (the dump flag is on
+/// in the live config) stalled the in-game draw pass for minutes — the Unit
+/// Tester freeze. One sweep per interval keeps the draw path live while the
+/// table is unresolved.
+const SWEEP_RETRY: std::time::Duration = std::time::Duration::from_secs(10);
 
 /// The ButtonSet for a unit id, from the resolved table (either layout).
 unsafe fn buttonset_for(unit_id: u16) -> *const ButtonSet {

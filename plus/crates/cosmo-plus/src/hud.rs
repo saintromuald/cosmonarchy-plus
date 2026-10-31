@@ -602,6 +602,15 @@ unsafe extern "C" fn wrapper() {
         );
     }
     draw_screen_overlays((0, 0));
+    // The fork presents only dirty cells (its grid.cpp dirty-cell lattice).
+    // Our draws went into the surface buffer unmarked, so only full-redraw
+    // frames ever showed them. Mark the overlay regions through the engine's
+    // mark_rect (0x0041E0D0), which the fork jump-patches into its grid, so
+    // this frame's flush composites and presents them. The union covers every
+    // screen overlay (badge, stamp, Tab indicator, larva entry, queue,
+    // changes panel, minimap labels): the whole authored screen scaled.
+    let sc = screen_scale();
+    mark_screen_rect(0, 0, (640.0 * sc) as i32, (480.0 * sc) as i32);
     static CALLS: AtomicU32 = AtomicU32::new(0);
     let n = CALLS.fetch_add(1, Ordering::Relaxed);
     if n < 3 {
@@ -618,6 +627,28 @@ unsafe extern "C" fn wrapper() {
             crop_h(),
         ));
     }
+}
+
+/// The engine's `mark_rect` (0x0041E0D0), register convention documented in
+/// the fork's grid_inject.cpp: eax = left, ecx = top, edx = bottom, [esp+4] =
+/// right, RET 4. The fork jump-patches this function into its dirty-cell
+/// grid, so calling it marks the surface cells for the next present.
+static MARK_RECT: AtomicU32 = AtomicU32::new(0x0041_E0D0);
+
+unsafe fn mark_screen_rect(left: i32, top: i32, right: i32, bottom: i32) {
+    core::arch::asm!(
+        "push {right:e}",
+        "mov eax, {left:e}",
+        "mov ecx, {top:e}",
+        "mov edx, {bottom:e}",
+        "call dword ptr [{mark}]",
+        options(nostack),
+        right = in(reg) right,
+        left = in(reg) left,
+        top = in(reg) top,
+        bottom = in(reg) bottom,
+        mark = sym MARK_RECT,
+    );
 }
 
 /// Draw every screen-corner overlay at the given origin. On the deferred

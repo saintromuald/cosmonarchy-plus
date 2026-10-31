@@ -12,7 +12,10 @@
 //! Nothing is drawn when the signature is missing (different gptp build — the
 //! feature disarms loudly, and the boot report says so) or outside a game.
 
+use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::OnceLock;
+
+use windows_sys::Win32::System::LibraryLoader::{GetModuleHandleA, GetProcAddress};
 
 /// `CameraCap` in the fork (F1..F8).
 const CAMERA_CAP: usize = 8;
@@ -104,10 +107,14 @@ pub(crate) fn install() {
     });
 }
 
-/// Resolve `hotkeys.screens` from the live imm32 at the signature site. The
-/// imm is rewritten to the loaded address once the game relocates gptp, so
-/// this runs at first draw, not at install.
+/// Resolve `hotkeys.screens` — prefer the fork's exported
+/// `cosmo_camera_screens` (the exact live array, added for this feature);
+/// fall back to the signature-scanned live imm32 when the export is absent
+/// (older gptp builds).
 unsafe fn resolve_screens_live() -> Option<usize> {
+    if let Some(p) = exported_screens() {
+        return Some(p);
+    }
     let Some(Some((sig_off, imm_off))) = SCREENS_SIG_OFF.get().copied() else {
         return None;
     };
@@ -131,6 +138,31 @@ unsafe fn resolve_screens_live() -> Option<usize> {
         return None;
     }
     Some(target)
+}
+
+/// The fork's exported `cosmo_camera_screens()` — a `const u16*` to the live
+/// `hotkeys.screens` array (8 × v2u16). Re-resolved per game (the hotloader
+/// can reload gptp.qdp between matches).
+unsafe fn exported_screens() -> Option<usize> {
+    static FN: AtomicU32 = AtomicU32::new(0);
+    static FROM: AtomicU32 = AtomicU32::new(0);
+    let current = GetModuleHandleA(b"gptp.qdp\0".as_ptr() as *const u8) as usize;
+    if current == 0 {
+        return None;
+    }
+    if FROM.load(Ordering::SeqCst) != current as u32 {
+        let p = GetProcAddress(current as *mut core::ffi::c_void, b"cosmo_camera_screens\0".as_ptr() as *const u8)
+            .map(|f| f as usize as u32)
+            .unwrap_or(0);
+        FN.store(p, Ordering::SeqCst);
+        FROM.store(current as u32, Ordering::SeqCst);
+    }
+    let f = FN.load(Ordering::SeqCst);
+    if f == 0 {
+        return None;
+    }
+    let f: unsafe extern "C" fn() -> *const u16 = core::mem::transmute(f);
+    Some(f() as usize)
 }
 
 /// Draw the C1–C8 labels onto the minimap. Called from hud.rs through the

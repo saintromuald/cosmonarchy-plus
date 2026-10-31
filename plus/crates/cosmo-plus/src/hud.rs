@@ -602,15 +602,8 @@ unsafe extern "C" fn wrapper() {
         );
     }
     draw_screen_overlays((0, 0));
-    // The fork presents only dirty cells (its grid.cpp dirty-cell lattice).
-    // Our draws went into the surface buffer unmarked, so only full-redraw
-    // frames ever showed them. Mark the overlay regions through the engine's
-    // mark_rect (0x0041E0D0), which the fork jump-patches into its grid, so
-    // this frame's flush composites and presents them. The union covers every
-    // screen overlay (badge, stamp, Tab indicator, larva entry, queue,
-    // changes panel, minimap labels): the whole authored screen scaled.
-    let sc = screen_scale();
-    mark_screen_rect(0, 0, (640.0 * sc) as i32, (480.0 * sc) as i32);
+    // The overlay text registers through the fork's graphics system (see
+    // gfx.rs), whose own refresh path presents it — no manual cell marking.
     static CALLS: AtomicU32 = AtomicU32::new(0);
     let n = CALLS.fetch_add(1, Ordering::Relaxed);
     if n < 3 {
@@ -635,6 +628,7 @@ unsafe extern "C" fn wrapper() {
 /// grid, so calling it marks the surface cells for the next present.
 static MARK_RECT: AtomicU32 = AtomicU32::new(0x0041_E0D0);
 
+#[allow(dead_code)]
 unsafe fn mark_screen_rect(left: i32, top: i32, right: i32, bottom: i32) {
     core::arch::asm!(
         "push {right:e}",
@@ -665,7 +659,7 @@ pub(crate) unsafe fn draw_screen_overlays(origin: (i32, i32)) {
     crate::nydus::draw_minimap(&mut buf, screen);
     crate::cam_labels::draw_minimap(&mut buf, screen);
     // HUD overlays: the idle-worker counter and the Tab subgroup indicator.
-    crate::overlay::draw_idle_counter(origin);
+    crate::overlay::draw_idle_counter(origin, true);
     crate::overlay::draw_tab_indicator(origin);
     // The changes panel + hint, the larva entry feedback, the 2x production
     // queue and the bug-capture confirmation share the screen layer.
@@ -679,6 +673,30 @@ pub(crate) unsafe fn draw_screen_overlays(origin: (i32, i32)) {
     if crate::config::env_flag("CM_PLUS_HUD_PROBE") {
         probe_markers();
     }
+}
+
+/// The text-only pass, run from the frame hook (tick time). The fork's
+/// graphics shapes registered here survive to the present's
+/// `draw_deferred_shapes` (which draws them post-resample and triggers the
+/// fork's own refresh); shapes registered from the draw-phase wrapper would
+/// be wiped by the next tick's reset before they ever draw.
+pub(crate) unsafe fn register_screen_texts() {
+    if crate::frame::frame_count() == 0 {
+        return; // not in a game
+    }
+    if !crate::gfx::available() {
+        return; // old gptp: the wrapper's legacy path draws the overlays
+    }
+    let origin = (0, 0);
+    let mut buf = [0u8; 16];
+    crate::nydus::draw_minimap(&mut buf, true);
+    crate::cam_labels::draw_minimap(&mut buf, true);
+    crate::overlay::draw_idle_counter(origin, false);
+    crate::overlay::draw_tab_indicator(origin);
+    crate::overlay::draw_changes(origin);
+    crate::overlay::draw_capture_confirmation(origin);
+    crate::larva_pick::draw(origin);
+    draw_build_rev(origin);
 }
 
 /// Temporary on-screen build stamp: the 7-char git rev of the running plugin,

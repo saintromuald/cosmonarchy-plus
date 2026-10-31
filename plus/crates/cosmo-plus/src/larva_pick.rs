@@ -317,47 +317,26 @@ pub(crate) unsafe fn poll() {
     *ENTRY.lock().unwrap() = Entry::default();
     let want = entry.confirmed(); // None = select all
 
-    // The hatcheries are the client's current selection (the extended table —
-    // the 12-slot vanilla table would miss part of a big selection).
-    let Some((_ids, sel_ptrs)) = crate::tab_cycle::selection_ptrs() else {
-        crate::log::log("[cosmo-plus] larva pick: nothing selected (select hatcheries first)");
+    // The flow the player uses: select the larva themselves (lv1 = ZergLarva
+    // 35, lv2 = ZergOcsalLarva 353), press Ctrl+Space, type how many to
+    // keep selected. The larva come straight from the current selection —
+    // no hatchery hunt.
+    let Some((ids, sel_ptrs)) = crate::tab_cycle::selection_ptrs() else {
+        crate::log::log("[cosmo-plus] larva pick: nothing selected (select larva first)");
         return;
     };
-    let hatcheries: Vec<*mut Unit> = sel_ptrs
+    let larva: Vec<*mut Unit> = ids
         .iter()
-        .map(|&p| p as *mut Unit)
+        .zip(sel_ptrs.iter())
+        .filter(|&(&id, _)| id == ID_ZERG_LARVA || id == ID_ZERG_OCSAL_LARVA)
+        .map(|(_, &p)| p as *mut Unit)
         .filter(|&p| !p.is_null())
         .collect();
-    if hatcheries.is_empty() {
-        crate::log::log("[cosmo-plus] larva pick: nothing selected (select hatcheries first)");
-        return;
-    }
-
-    // Gather larva: connected_unit points at one of the selected hatcheries and the
-    // unit id is a larva type; hidden larva are skipped (same rule as the mod).
-    let mut list: Vec<*mut Unit> = Vec::new();
-    crate::frame::for_each_unit(|u| {
-        if list.len() >= SELECTION_LIMIT {
-            return;
-        }
-        let id = (*u).unit_id;
-        if id != ID_ZERG_LARVA && id != ID_ZERG_OCSAL_LARVA {
-            return;
-        }
-        let connected = core::ptr::read((u as usize + UNIT_CONNECTED_UNIT) as *const *mut Unit);
-        if connected.is_null() || !hatcheries.contains(&connected) {
-            return;
-        }
-        let sprite = (*u).flingy.sprite;
-        if sprite.is_null() || (*sprite).visibility_mask == 0 {
-            return;
-        }
-        list.push(u);
-    });
-
-    let n = list.len();
+    let n = larva.len();
     if n == 0 {
-        crate::log::log("[cosmo-plus] larva pick: selected hatcheries have no larva");
+        crate::log::log(
+            "[cosmo-plus] larva pick: no larva selected (select larva, then Ctrl+Space)",
+        );
         return;
     }
     let take = match want {
@@ -368,11 +347,12 @@ pub(crate) unsafe fn poll() {
         "[cosmo-plus] larva pick: selecting {take} of {n} larva (requested {})",
         want.map_or("all".to_string(), |w| w.to_string())
     ));
-    crate::select::select_units_if_alt_not_held(list.as_ptr(), take as u32, 1, 1);
+    crate::select::select_units_if_alt_not_held(larva.as_ptr(), take as u32, 1, 1);
 }
 
 /// Draw the count-entry feedback while the window is open, at the given
-/// origin (screen layer or world-pass fallback).
+/// origin (screen layer or world-pass fallback). A dark filled box behind
+/// the text makes it read as a popup on any background.
 pub(crate) unsafe fn draw(origin: (i32, i32)) {
     if !ACTIVE.load(Ordering::SeqCst) {
         return;
@@ -384,5 +364,9 @@ pub(crate) unsafe fn draw(origin: (i32, i32)) {
         entry.value.to_string()
     };
     let line = format!("count: {shown}  (Enter = select, Esc = cancel)");
+    let sc = crate::hud::screen_scale();
+    let (bx, by) = (origin.0 + (50.0 * sc) as i32, origin.1 + (16.0 * sc) as i32);
+    crate::gfx::box_filled(bx, by, bx + (340.0 * sc) as i32, by + (40.0 * sc) as i32, 0);
+    crate::gfx::box_outline(bx, by, bx + (340.0 * sc) as i32, by + (40.0 * sc) as i32, 255);
     crate::overlay::draw_text_lines(origin, "Larva", &[line]);
 }

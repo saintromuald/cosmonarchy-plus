@@ -93,6 +93,39 @@ unsafe fn table_plausible(table: *const ButtonSet) -> bool {
     ok >= 3
 }
 
+/// Whether the widescreen build's exe-embedded VALUE array sits at the
+/// vanilla global address itself (stride 12). Several known unit ids must
+/// carry sane ButtonSets whose first button looks like a real engine button
+/// (grid position, small icon id, action/requirement functions in the exe
+/// image). The exe data region is always committed, so the read itself is
+/// safe; only the first_button pointers are validated against the page map.
+unsafe fn exe_table_plausible() -> bool {
+    const IDS: &[u16] = &[7, 9, 35, 41, 63, 64, 106, 131];
+    let guard = full_space_guard();
+    let mut ok = 0;
+    for &id in IDS {
+        let bs = (G_BUTTONSET_TABLE + id as usize * 12) as *const ButtonSet;
+        if !guard.readable(bs as usize, core::mem::size_of::<ButtonSet>()) {
+            continue;
+        }
+        let count = (*bs).buttons_in_set;
+        if !(1..=MAX_BUTTONS).contains(&count) {
+            continue;
+        }
+        let first = (*bs).first_button;
+        if first.is_null() || !guard.readable(first as usize, core::mem::size_of::<Button>()) {
+            continue;
+        }
+        let b = &*first;
+        let funcs_ok = (b.requirement_func == 0 || (0x0040_0000..0x0047_0000).contains(&b.requirement_func))
+            && (b.action_func == 0 || (0x0040_0000..0x0047_0000).contains(&b.action_func));
+        if (0..=15).contains(&b.position) && b.icon_id < 700 && funcs_ok {
+            ok += 1;
+        }
+    }
+    ok >= 6
+}
+
 /// Resolve the live buttonset table pointer: validate the vanilla exe global
 /// first, then scan the fork's live `update_current_buttonset` (the E9 target
 /// at 0x004599A0) for absolute table-pointer loads and validate each
@@ -222,6 +255,23 @@ unsafe fn sweep_for_table(base: usize, size: usize) -> Option<(usize, usize)> {
     None
 }
 
+/// The resolved table base as a mutable pointer: the VALUE-array base for the
+/// value layout, or the POINTER-array base for the pointer layout. Null while
+/// unresolved. Used by the features that patch buttonsets in place
+/// (ultraload icon).
+pub(crate) unsafe fn resolved_table_base() -> usize {
+    let _ = resolve_table(); // resolves on demand (steps 1/1b are unthrottled)
+    let base = TABLE_GLOBAL_ADDR.load(Ordering::SeqCst);
+    if base == 0 {
+        return 0;
+    }
+    if TABLE_STRIDE.load(Ordering::SeqCst) != 0 {
+        base
+    } else {
+        std::ptr::read(base as *const *mut ButtonSet) as usize
+    }
+}
+
 /// The ButtonSet for a unit id, from the resolved table (either layout).
 unsafe fn buttonset_for(unit_id: u16) -> *const ButtonSet {
     let base = TABLE_GLOBAL_ADDR.load(Ordering::SeqCst);
@@ -240,9 +290,13 @@ unsafe fn buttonset_for(unit_id: u16) -> *const ButtonSet {
 unsafe fn resolve_table() -> *const ButtonSet {
     let cached = TABLE_GLOBAL_ADDR.load(Ordering::SeqCst);
     if cached != 0 {
+        if TABLE_STRIDE.load(Ordering::SeqCst) != 0 {
+            // Value-array layout: the cached address IS the array base.
+            return cached as *const ButtonSet;
+        }
         return std::ptr::read(cached as *const *const ButtonSet);
     }
-    // 1. The vanilla global.
+    // 1. The vanilla global as a POINTER to the table (classic layouts).
     let vanilla = std::ptr::read(G_BUTTONSET_TABLE as *const *const ButtonSet);
     if table_plausible(vanilla) {
         TABLE_GLOBAL_ADDR.store(G_BUTTONSET_TABLE, Ordering::SeqCst);
@@ -251,6 +305,22 @@ unsafe fn resolve_table() -> *const ButtonSet {
             vanilla as usize,
         ));
         return vanilla;
+    }
+    // 1b. The widescreen build keeps the ButtonSet VALUE array (stride 12) AT
+    //     the exe global itself. Reading the pointer layout above sees
+    //     record[0].buttons_in_set as a bogus "pointer" (0x6), which is why
+    //     this build always reported unresolved. The records' first_button
+    //     pointers are validated as real Button arrays (exe-range action/
+    //     requirement functions); connected_unit is NOT required — the
+    //     widescreen build stores 0xFFFF there for every record.
+    if exe_table_plausible() {
+        TABLE_GLOBAL_ADDR.store(G_BUTTONSET_TABLE, Ordering::SeqCst);
+        TABLE_STRIDE.store(12, Ordering::SeqCst);
+        crate::log::log(&format!(
+            "[cosmo-plus] abilities: buttonset table @ 0x{G_BUTTONSET_TABLE:08X} \
+             (value array stride 12, exe-embedded; widescreen layout)"
+        ));
+        return G_BUTTONSET_TABLE as *const ButtonSet;
     }
     // 2. Brute-force sweep: the table (pointer array or value array) lives in
     //    writable memory — gptp's own .data/.bss or a heap block referenced

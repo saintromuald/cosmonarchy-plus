@@ -153,13 +153,14 @@ pub(crate) fn install_once() {
 }
 
 unsafe fn patch_set(index: usize, unit_id: u16) -> bool {
-    let table = *(BUTTONSET_TABLE_ADDR as *const *mut ButtonSet);
-    if !button_table_valid(table) {
+    // The buttonset table layout differs per build (pointer global vs the
+    // widescreen build's exe-embedded value array); resolve through the same
+    // path the ability classification uses.
+    let table = crate::abilities::resolved_table_base() as *mut ButtonSet;
+    if table.is_null() || !button_table_valid(table) {
         crate::log::log(&format!(
-            "[cosmo-plus] ultraload icon: g_buttonset_table @0x{BUTTONSET_TABLE_ADDR:08X} \
-             holds 0x{:08X}, which is not a live table pointer (the build relocated \
-             it?); icon patch skipped for unit {unit_id}",
-            table as usize
+            "[cosmo-plus] ultraload icon: buttonset table unresolved (global \
+             @0x{BUTTONSET_TABLE_ADDR:08X}); icon patch skipped for unit {unit_id}"
         ));
         return false;
     }

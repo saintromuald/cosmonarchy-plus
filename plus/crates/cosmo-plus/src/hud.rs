@@ -21,7 +21,7 @@
 //! draw-hook surface at first draw (units in [10000, 30000], the crop a
 //! sane sub-rect of the surface) — the exact address cannot drift silently.
 
-use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI32, AtomicU32, Ordering};
 
 /// Preferred-base addresses of the WorldZoom member statics. `units` is
 /// `m_current_units` (the draw hook compares it against 10000 = BaseUnits),
@@ -197,6 +197,13 @@ const BODY_MASK: &[u8] = &[
 /// The original call target (`draw_deferred_screen_text`), resolved live from
 /// the call's rel32 (relocations never matter this way).
 static CHAIN: AtomicU32 = AtomicU32::new(0);
+
+/// The fallback engine screen-text call site + its original rel32, saved when
+/// the fallback chain is installed and restored when the deferred re-chain
+/// supersedes it (both chains drawing would double the overlays, and the
+/// pre-resample chain would draw the fork's deferred text too early).
+static FALLBACK_SITE: AtomicU32 = AtomicU32::new(0);
+static FALLBACK_ORIG_REL: AtomicI32 = AtomicI32::new(0);
 
 /// Resolved status for the boot report.
 pub(crate) fn status() -> String {
@@ -404,6 +411,10 @@ unsafe fn install_via_screen_text_call() {
     let rel = std::ptr::read((SITE + 1) as *const i32);
     let chain = (SITE as u32).wrapping_add(5).wrapping_add(rel as u32);
     CHAIN.store(chain, Ordering::SeqCst);
+    // Remember the original rel32 so the deferred re-chain can restore this
+    // site (see restore_fallback_chain).
+    FALLBACK_SITE.store(SITE as u32, Ordering::SeqCst);
+    FALLBACK_ORIG_REL.store(rel, Ordering::SeqCst);
 
     let my = wrapper as *const () as usize as u32;
     let new_rel = my.wrapping_sub(SITE as u32 + 5) as i32;
@@ -529,7 +540,41 @@ unsafe fn discover_deferred_pass(chain_fn: usize) -> bool {
     crate::log::log(&format!(
         "[cosmo-plus] hud overlay: deferred rediscovery: body 0x{body:08X}"
     ));
-    // Caller: the E8 targeting the body (through a jmp thunk if needed).
+    // The deferred pass in this build is an INLINED guard inside the present
+    // path — `cmp [flag],0; je skip; mov [flag],0; call draw_engine; skip:` —
+    // so no call anywhere targets the guard itself (the caller scan always
+    // fails). Chain the guarded draw_engine call instead: its E8 sits at
+    // body+0x10, right after the flag clear. The wrapper replaces it and
+    // chains the original target, so the overlays draw on the presented
+    // buffer exactly when the fork draws its deferred text.
+    let guard_call = body + 0x10;
+    if guard.readable(guard_call, 5) && std::ptr::read(guard_call as *const u8) == 0xE8 {
+        let rel = std::ptr::read((guard_call + 1) as *const i32) as i64;
+        let chain = guard_call as i64 + 5 + rel;
+        if chain >= base as i64 && chain < (base + size) as i64 {
+            CHAIN.store(chain as u32, Ordering::SeqCst);
+            let my = wrapper as *const () as usize as u32;
+            let new_rel = my.wrapping_sub(guard_call as u32 + 5) as i32;
+            let patch: [u8; 5] = [
+                0xE8,
+                new_rel as u8,
+                (new_rel >> 8) as u8,
+                (new_rel >> 16) as u8,
+                (new_rel >> 24) as u8,
+            ];
+            let api = crate::plus::api();
+            let r = (api.write_exe_memory)(guard_call, patch.as_ptr(), patch.len());
+            crate::log::log(&format!(
+                "[cosmo-plus] hud overlay: deferred pass chained via the inlined guard call \
+                 @ 0x{guard_call:08X} (chain 0x{chain:08X}, patch={r}); overlays draw on the \
+                 presented buffer at every zoom"
+            ));
+            crate::state::hook("deferred-screen-text", guard_call, chain as usize, my as usize);
+            restore_fallback_chain();
+            return true;
+        }
+    }
+    // Older builds: an actual E8 caller of the guard (through a jmp thunk).
     let mut site: Option<usize> = None;
     for i in 0..size.saturating_sub(5) {
         let s = base + i;
@@ -577,7 +622,35 @@ unsafe fn discover_deferred_pass(chain_fn: usize) -> bool {
          flag 0x{flag:08X}, patch={r})"
     ));
     crate::state::hook("deferred-screen-text", site, body as usize, my as usize);
+    restore_fallback_chain();
     true
+}
+
+/// Remove the fallback engine screen-text chain (0x004BD614) once the
+/// deferred pass is chained: with both chains the wrapper runs twice per
+/// frame, and the pre-resample chain would draw the fork's deferred text on
+/// the world surface before the zoom resample.
+unsafe fn restore_fallback_chain() {
+    let site = FALLBACK_SITE.load(Ordering::SeqCst);
+    if site == 0 {
+        return;
+    }
+    let site = site as usize;
+    let rel = FALLBACK_ORIG_REL.load(Ordering::SeqCst);
+    let patch: [u8; 5] = [
+        0xE8,
+        rel as u8,
+        (rel >> 8) as u8,
+        (rel >> 16) as u8,
+        (rel >> 24) as u8,
+    ];
+    let api = crate::plus::api();
+    let r = (api.write_exe_memory)(site, patch.as_ptr(), patch.len());
+    FALLBACK_SITE.store(0, Ordering::SeqCst);
+    crate::log::log(&format!(
+        "[cosmo-plus] hud overlay: restored the engine screen-text call @ 0x{site:08X} \
+         (patch={r}); overlays draw only on the deferred pass"
+    ));
 }
 
 /// Replaces the original callee: chain it first (it draws the fork's message

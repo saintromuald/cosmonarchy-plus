@@ -386,7 +386,7 @@ unsafe fn draw_world_annotations() {
 /// corner is the one coordinate space that has always been visible on this
 /// engine (the changes panel and Tab indicator use it). Grey race worker
 /// icon at 0, yellow when workers are idle.
-pub(crate) unsafe fn draw_idle_counter(origin: (i32, i32)) {
+pub(crate) unsafe fn draw_idle_counter(origin: (i32, i32), icons: bool) {
     if crate::frame::frame_count() == 0 {
         return; // not in a game
     }
@@ -415,16 +415,20 @@ pub(crate) unsafe fn draw_idle_counter(origin: (i32, i32)) {
     let ty = origin.1 + (oy as f32 * sc) as i32;
 
     // The race's greyed worker at 0 (SC2 shows the worker button greyed), the
-    // first idle worker's icon otherwise.
-    let race = player_race(local as u8);
-    let icon_id = icon.unwrap_or_else(|| tier1_worker_icon(race));
-    crate::icon::draw_unit_icon_scaled(
-        icon_id,
-        tx,
-        ty,
-        (24.0 * sc) as i32,
-        (22.0 * sc) as i32,
-    );
+    // first idle worker's icon otherwise. Icons draw straight into the
+    // current surface, so they run only from the draw-phase pass (the
+    // frame-hook pass registers the text alone through the fork's shapes).
+    if icons {
+        let race = player_race(local as u8);
+        let icon_id = icon.unwrap_or_else(|| tier1_worker_icon(race));
+        crate::icon::draw_unit_icon_scaled(
+            icon_id,
+            tx,
+            ty,
+            (24.0 * sc) as i32,
+            (22.0 * sc) as i32,
+        );
+    }
 
     set_font_handle(font);
     write_draw_text(0, 0, 0x7FFF, 0x7FFF);
@@ -1278,20 +1282,25 @@ fn padded(s: &str) -> Vec<u8> {
 }
 
 /// `helper::bw_print_xy` — eax = text, esi = x, [esp] = y (callee cleans the arg).
+/// When the fork exports the graphics helpers, the text registers through the
+/// fork's shape system instead (post-resample + self-refreshing present); the
+/// engine primitive remains the fallback.
 #[inline(never)]
 pub(crate) unsafe fn bw_print_xy(text: *const u8, x: i32, y: i32) {
-    core::arch::asm!(
-        "pushad",
-        "mov esi, ebx",
-        "push ecx",
-        "call edx",
-        "popad",
-        in("eax") text,
-        in("ebx") x,
-        in("ecx") y,
-        in("edx") ADDR_BW_PRINT_XY as i32,
-        options(nostack),
-    );
+    crate::gfx::text(x, y, text, || {
+        core::arch::asm!(
+            "pushad",
+            "mov esi, ebx",
+            "push ecx",
+            "call edx",
+            "popad",
+            in("eax") text,
+            in("ebx") x,
+            in("ecx") y,
+            in("edx") ADDR_BW_PRINT_XY as i32,
+            options(nostack),
+        );
+    });
 }
 
 /// `helper::get_color_handle(TextColor)` — al = colour id.

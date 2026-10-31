@@ -16,6 +16,7 @@ mod crash;
 mod data;
 mod draft;
 mod frame;
+mod gfx;
 mod hud;
 mod icon;
 mod idle_workers;

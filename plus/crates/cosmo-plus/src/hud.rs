@@ -225,6 +225,21 @@ unsafe fn refresh_screen_scale(screen: bool) {
         SCREEN_SCALE.store(1000, Ordering::Relaxed);
         return;
     }
+    // The presented surface's width (the fork's Bitmap at *g_current_surface,
+    // 0x006CF4A8): the fork's surface is 1920 wide on the widescreen build
+    // (display::SurfaceWidth) vs the 640-authored space the overlay positions
+    // are designed in, so the scale is width/640. The old minimap-width
+    // heuristic measured the fork's dialog scale (2x), not the surface scale,
+    // and placed every screen-fixed overlay 1.5x too small.
+    let surf = std::ptr::read(0x006C_F4A8 as *const usize);
+    if surf != 0 {
+        let w = std::ptr::read(surf as *const u16) as u32;
+        if (640..=4096).contains(&w) {
+            let scale = (w as f32 / 640.0).clamp(1.0, 4.0);
+            SCREEN_SCALE.store((scale * 1000.0) as u32, Ordering::Relaxed);
+            return;
+        }
+    }
     if let Some(rect) = crate::state::minimap_rect() {
         let w = rect[2] - rect[0];
         if (40..=640).contains(&w) {
@@ -687,6 +702,7 @@ pub(crate) unsafe fn register_screen_texts() {
     if !crate::gfx::available() {
         return; // old gptp: the wrapper's legacy path draws the overlays
     }
+    refresh_screen_scale(true);
     let origin = (0, 0);
     let mut buf = [0u8; 16];
     crate::nydus::draw_minimap(&mut buf, true);

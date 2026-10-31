@@ -19,6 +19,8 @@ use std::sync::Mutex;
 
 use once_cell::sync::Lazy;
 
+use crate::overlay::PageGuard;
+
 /// `g_buttonset_table` (ButtonSet** at 0x005187E8; the extender resolves it).
 const G_BUTTONSET_TABLE: usize = 0x0051_87E8;
 
@@ -115,42 +117,83 @@ unsafe fn buttonset_valid(bs: *const ButtonSet, id: u16) -> bool {
     (*bs).connected_unit as u16 == id
 }
 
+/// When the memory sweep last ran (throttle: see `resolve_table`).
+static LAST_SWEEP: Lazy<Mutex<Option<std::time::Instant>>> = Lazy::new(|| Mutex::new(None));
+/// Minimum gap between full sweeps. A full sweep walks every 4-byte cell of
+/// the gptp module image; unthrottled per-frame retries (the dump flag is on
+/// in the live config) stalled the in-game draw pass for minutes — the Unit
+/// Tester freeze. One sweep per interval keeps the draw path live while the
+/// table is unresolved.
+const SWEEP_RETRY: std::time::Duration = std::time::Duration::from_secs(10);
+
+/// The whole 2 GiB user address space as one page map, so every readability
+/// check inside the sweep is a bit test. The candidates the sweep validates
+/// (table arrays) are heap-resident in the widescreen build — they can live
+/// anywhere, so the map must span the full space, not just one module.
+fn full_space_guard() -> PageGuard {
+    PageGuard::new(0x10000, 0x7FFE_0000 - 0x10000)
+}
+
+/// `buttonset_valid` against a prebuilt page map: the readability checks are
+/// bit tests, only the field reads remain. (The raw `buttonset_valid` is fine
+/// for one-off probes; the sweep needs this to avoid a VirtualQuery per
+/// candidate.)
+unsafe fn buttonset_valid_guarded(bs: *const ButtonSet, id: u16, guard: &PageGuard) -> bool {
+    if bs.is_null() || !guard.readable(bs as usize, core::mem::size_of::<ButtonSet>()) {
+        return false;
+    }
+    let count = (*bs).buttons_in_set;
+    if count == 0 || count > MAX_BUTTONS {
+        return false;
+    }
+    let first = (*bs).first_button;
+    if first.is_null() || !guard.readable(first as usize, core::mem::size_of::<Button>()) {
+        return false;
+    }
+    (*bs).connected_unit as u16 == id
+}
+
 /// Sweep a memory range for the buttonset table. Returns (array base, stride)
 /// where stride 0 = pointer array, stride > 0 = value array of ButtonSets.
 unsafe fn sweep_for_table(base: usize, size: usize) -> Option<(usize, usize)> {
     const IDS: &[u16] = &[7, 35, 41, 63, 64, 106, 131, 314];
     const STRIDES: &[usize] = &[12, 16, 20, 24];
+    // Every candidate read is guarded by a bit test against the page map; the
+    // previous per-cell VirtualQuery version ran tens of millions of queries
+    // per pass and froze the game (see the freeze watchdog captures).
+    let guard = full_space_guard();
     let step = 4usize;
+    let max_cells = (size / step).min(8_000_000) as u32;
     let mut cell = base;
     let mut cells = 0u32;
-    while cell + 4 <= base + size && cells < 3_000_000 {
+    while cell + 4 <= base + size && cells < max_cells {
         cells += 1;
         // (a) the cell's value is the array base.
         let arr = std::ptr::read(cell as *const usize);
-        if arr != 0 && (arr as usize) % 4 == 0 {
+        if arr != 0 && (arr as usize) % 4 == 0 && guard.readable(arr, 800 * 4) {
             // pointer array: validate the range once, then raw-read.
-            if crate::overlay::readable_ptr(arr as *const u8, 800 * 4) {
-                let mut ok = 0;
-                for &id in IDS {
-                    let p = std::ptr::read((arr + id as usize * 4) as *const *const ButtonSet);
-                    if buttonset_valid(p, id) {
-                        ok += 1;
-                    }
+            let mut ok = 0;
+            for &id in IDS {
+                let p = std::ptr::read((arr + id as usize * 4) as *const *const ButtonSet) as usize;
+                if guard.readable(p, core::mem::size_of::<ButtonSet>())
+                    && buttonset_valid_guarded(p as *const ButtonSet, id, &guard)
+                {
+                    ok += 1;
                 }
-                if ok >= 5 {
-                    return Some((arr, 0));
-                }
+            }
+            if ok >= 5 {
+                return Some((arr, 0));
             }
             // value array: each id at arr + id*stride.
             for &st in STRIDES {
                 let need = IDS[IDS.len() - 1] as usize * st + core::mem::size_of::<ButtonSet>();
-                if !crate::overlay::readable_ptr(arr as *const u8, need) {
+                if !guard.readable(arr, need) {
                     continue;
                 }
                 let mut ok = 0;
                 for &id in IDS {
                     let bs = (arr + id as usize * st) as *const ButtonSet;
-                    if buttonset_valid(bs, id) {
+                    if buttonset_valid_guarded(bs, id, &guard) {
                         ok += 1;
                     }
                 }
@@ -160,11 +203,13 @@ unsafe fn sweep_for_table(base: usize, size: usize) -> Option<(usize, usize)> {
             }
         }
         // (b) the cell itself is a pointer-array base.
-        if crate::overlay::readable_ptr(cell as *const u8, 800 * 4) {
+        if guard.readable(cell, 800 * 4) {
             let mut ok = 0;
             for &id in IDS {
-                let p = std::ptr::read((cell + id as usize * 4) as *const *const ButtonSet);
-                if buttonset_valid(p, id) {
+                let p = std::ptr::read((cell + id as usize * 4) as *const *const ButtonSet) as usize;
+                if guard.readable(p, core::mem::size_of::<ButtonSet>())
+                    && buttonset_valid_guarded(p as *const ButtonSet, id, &guard)
+                {
                     ok += 1;
                 }
             }
@@ -211,7 +256,21 @@ unsafe fn resolve_table() -> *const ButtonSet {
     //    writable memory — gptp's own .data/.bss or a heap block referenced
     //    from it. For every 4-byte cell, (a) treat the cell's value as the
     //    array base, (b) treat the cell itself as the array base; validate a
-    //    few known unit ids for each layout.
+    //    few known unit ids for each layout. THROTTLED: one full sweep per
+    //    SWEEP_RETRY interval — an unthrottled per-frame sweep froze the
+    //    in-game draw pass for minutes (the freeze watchdog captured the
+    //    thread mid-sweep), so between sweeps the resolution simply reports
+    //    unresolved and the game keeps running.
+    {
+        let now = std::time::Instant::now();
+        let mut last = LAST_SWEEP.lock().unwrap();
+        if let Some(t) = *last {
+            if now.duration_since(t) < SWEEP_RETRY {
+                return std::ptr::null();
+            }
+        }
+        *last = Some(now);
+    }
     if let Some(base) = crate::zoom::gptp_module() {
         if let Some(t) = sweep_for_table(base.0, base.1) {
             TABLE_GLOBAL_ADDR.store(t.0, Ordering::SeqCst);

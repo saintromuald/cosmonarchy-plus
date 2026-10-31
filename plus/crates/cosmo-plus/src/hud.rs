@@ -690,11 +690,12 @@ pub(crate) unsafe fn draw_screen_overlays(origin: (i32, i32)) {
     }
 }
 
-/// The text-only pass, run from the frame hook (tick time). The fork's
-/// graphics shapes registered here survive to the present's
-/// `draw_deferred_shapes` (which draws them post-resample and triggers the
-/// fork's own refresh); shapes registered from the draw-phase wrapper would
-/// be wiped by the next tick's reset before they ever draw.
+/// The text-only pass (registered through the fork's graphics shapes).
+/// NOTE: shapes registered from the tick get wiped by the fork's
+/// `reset_all_graphics` in the same frame; the draw-phase wrapper is the
+/// registration point that survives to the next present's deferred draw
+/// (verified: the REPL probe text registered from the draw phase renders).
+#[allow(dead_code)]
 pub(crate) unsafe fn register_screen_texts() {
     if crate::frame::frame_count() == 0 {
         return; // not in a game
@@ -733,13 +734,17 @@ unsafe fn draw_build_rev(origin: (i32, i32)) {
     let label = format!("build {}", &rev[..rev.len().min(7)]);
     let len = label.len().min(buf.len() - 1);
     buf[..len].copy_from_slice(&label.as_bytes()[..len]);
+    // Just above the idle badge: the live minimap rect (surface space) minus
+    // the badge's 34 px + a line.
+    let rect = crate::state::minimap_rect().unwrap_or([6, 373, 133, 450]);
     let sc = screen_scale();
     crate::overlay::bw_print_xy(
         buf.as_ptr(),
-        origin.0 + (8.0 * sc) as i32,
-        origin.1 + (320.0 * sc) as i32,
+        rect[0] + 4,
+        rect[1] - 52,
     );
     crate::overlay::set_font_handle(core::ptr::null_mut());
+    let _ = sc;
 }
 
 /// One-shot state log + per-frame markers at the candidate transforms

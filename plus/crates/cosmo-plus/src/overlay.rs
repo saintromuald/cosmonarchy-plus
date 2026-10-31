@@ -406,13 +406,19 @@ pub(crate) unsafe fn draw_idle_counter(origin: (i32, i32), icons: bool) {
         crate::log::log(&format!("[cosmo-plus] idle counter: first draw n={n}"));
     });
 
-    // SC2's lower-left corner: above the minimap panel (the corner itself is
-    // the unit panel). Authored in the 640x480 space, scaled to the current
-    // layer (the widescreen screen buffer is ~2x).
+    // SC2's lower-left corner: above the minimap panel. The live minimap
+    // rect (0x00512D00) is in the presented surface's coordinate space
+    // (1920x1080 on the fork's widescreen build), so the default anchor sits
+    // directly above it; a REPL-pinned badge uses authored 640-space
+    // coordinates scaled to the surface.
     let sc = crate::hud::screen_scale();
-    let (ox, oy) = crate::repl::badge_pin().unwrap_or((8, 340));
-    let tx = origin.0 + (ox as f32 * sc) as i32;
-    let ty = origin.1 + (oy as f32 * sc) as i32;
+    let (ox, oy) = crate::repl::badge_pin().unwrap_or((-1, -1));
+    let (tx, ty) = if ox < 0 {
+        let rect = crate::state::minimap_rect().unwrap_or([6, 373, 133, 450]);
+        (rect[0] + 4, rect[1] - 34)
+    } else {
+        (origin.0 + (ox as f32 * sc) as i32, origin.1 + (oy as f32 * sc) as i32)
+    };
 
     // The race's greyed worker at 0 (SC2 shows the worker button greyed), the
     // first idle worker's icon otherwise. Icons draw straight into the

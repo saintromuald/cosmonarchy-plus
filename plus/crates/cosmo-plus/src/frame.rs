@@ -90,9 +90,6 @@ unsafe extern "C" fn tick() {
         crate::antimeta::on_game_tick();
         crate::draft::on_game_tick();
         crate::ultraload::on_game_tick();
-        // Register the screen-fixed overlay text through the fork's graphics
-        // system (shapes survive to the present's deferred draw + refresh).
-        crate::hud::register_screen_texts();
         // NOTE: the subgroup Tab press is deliberately NOT processed here.
         // The rotation + command-card refresh are UI work and must run in the
         // draw pass; running update_selected_unit_data inside the simulation
